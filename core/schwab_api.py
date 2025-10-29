@@ -68,7 +68,8 @@ class SchwabAPI:
                         self.client_id,
                         self.client_secret,
                         self.redirect_uri,
-                        self.token_file_path
+                        self.token_file_path,
+                        callback_timeout=600  # 10 minutes timeout for authentication
                     )
                     self.auth_success = True
                 except Exception as e:

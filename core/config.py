@@ -15,7 +15,7 @@ class TradingConfig:
     # Charles Schwab API
     SCHWAB_CLIENT_ID: str = os.getenv("SCHWAB_CLIENT_ID", "")
     SCHWAB_CLIENT_SECRET: str = os.getenv("SCHWAB_CLIENT_SECRET", "")
-    SCHWAB_REDIRECT_URI: str = os.getenv("SCHWAB_REDIRECT_URI", "https://127.0.0.1:8080")
+    SCHWAB_REDIRECT_URI: str = os.getenv("SCHWAB_REDIRECT_URI", "https://127.0.0.1:5035")
     SCHWAB_ACCOUNT_ID: str = os.getenv("SCHWAB_ACCOUNT_ID", "")
     
     # OpenAI Configuration

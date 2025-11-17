@@ -6,7 +6,7 @@ import requests
 from flask import Blueprint, request, jsonify
 from datetime import datetime, time
 from utils.logger import setup_logger
-from utils.helpers import load_tokens, schwab_api_request
+from utils.helpers import load_tokens, schwab_api_request, save_tokens
 from utils.risk_control import (
     validate_trade_signal,
     calculate_position_size,
@@ -39,6 +39,32 @@ def get_accounts():
         logger.info("Retrieved accounts")
         return jsonify(data), 200
     except Exception as e:
+        # If 401 error, try to refresh token and retry
+        if "401" in str(e) or "Unauthorized" in str(e):
+            logger.warning("401 error detected, attempting token refresh...")
+            try:
+                from api.auth import refresh_access_token
+                if tokens.get('refresh_token'):
+                    new_tokens = refresh_access_token(tokens['refresh_token'])
+                    save_tokens(new_tokens)
+                    logger.info("Token refreshed, retrying request...")
+                    # Retry with new token
+                    response = schwab_api_request("GET", url, new_tokens['access_token'])
+                    data = response.json()
+                    logger.info("Retrieved accounts after token refresh")
+                    return jsonify(data), 200
+                else:
+                    return jsonify({
+                        "error": "Token expired. Please re-authenticate.",
+                        "re_auth_url": "/auth/login"
+                    }), 401
+            except Exception as refresh_error:
+                logger.error(f"Token refresh failed: {refresh_error}")
+                return jsonify({
+                    "error": "Token expired and refresh failed. Please re-authenticate.",
+                    "re_auth_url": "/auth/login"
+                }), 401
+        
         logger.error(f"Failed to get accounts: {e}")
         return jsonify({"error": str(e)}), 500
 

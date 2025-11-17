@@ -58,6 +58,8 @@ def callback():
     """
     Handle OAuth callback with authorization code.
     """
+    from urllib.parse import unquote
+    
     code = request.args.get('code')
     error = request.args.get('error')
     
@@ -68,7 +70,10 @@ def callback():
     if not code:
         return jsonify({"error": "No authorization code received"}), 400
     
-    logger.info("Received authorization code, exchanging for tokens...")
+    # URL decode the code in case it's encoded
+    code = unquote(code)
+    
+    logger.info(f"Received authorization code (length: {len(code)}), exchanging for tokens...")
     
     # Exchange code for tokens
     try:
@@ -138,22 +143,61 @@ def exchange_code_for_tokens(code: str) -> dict:
     Returns:
         Dictionary with tokens
     """
+    import base64
+    
     client_id = os.getenv("SCHWAB_CLIENT_ID")
     client_secret = os.getenv("SCHWAB_CLIENT_SECRET")
     redirect_uri = os.getenv("SCHWAB_REDIRECT_URI", "http://localhost:5035")
     
+    if not client_id or not client_secret:
+        raise ValueError("SCHWAB_CLIENT_ID and SCHWAB_CLIENT_SECRET must be set")
+    
+    # Schwab API requires Basic Authentication
+    # Encode client_id:client_secret as base64
+    credentials = f"{client_id}:{client_secret}"
+    encoded_credentials = base64.b64encode(credentials.encode()).decode()
+    
+    headers = {
+        "Authorization": f"Basic {encoded_credentials}",
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+    
+    # Form data (not JSON)
     data = {
         "grant_type": "authorization_code",
         "code": code,
-        "client_id": client_id,
-        "client_secret": client_secret,
         "redirect_uri": redirect_uri
     }
     
-    response = requests.post(SCHWAB_TOKEN_URL, data=data, timeout=30)
-    response.raise_for_status()
+    logger.info(f"Exchanging code for tokens (redirect_uri: {redirect_uri})")
     
-    return response.json()
+    try:
+        response = requests.post(SCHWAB_TOKEN_URL, headers=headers, data=data, timeout=30)
+        
+        # Log detailed error if request fails
+        if response.status_code != 200:
+            logger.error(f"Token exchange failed: {response.status_code}")
+            logger.error(f"Response: {response.text}")
+            try:
+                error_data = response.json()
+                logger.error(f"Error details: {error_data}")
+            except:
+                pass
+        
+        response.raise_for_status()
+        
+        tokens = response.json()
+        logger.info("Token exchange successful")
+        return tokens
+        
+    except requests.exceptions.HTTPError as e:
+        logger.error(f"HTTP Error during token exchange: {e}")
+        if hasattr(e.response, 'text'):
+            logger.error(f"Response body: {e.response.text}")
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error during token exchange: {e}")
+        raise
 
 def refresh_access_token(refresh_token: str) -> dict:
     """
@@ -165,18 +209,40 @@ def refresh_access_token(refresh_token: str) -> dict:
     Returns:
         Dictionary with new tokens
     """
+    import base64
+    
     client_id = os.getenv("SCHWAB_CLIENT_ID")
     client_secret = os.getenv("SCHWAB_CLIENT_SECRET")
     
-    data = {
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token,
-        "client_id": client_id,
-        "client_secret": client_secret
+    if not client_id or not client_secret:
+        raise ValueError("SCHWAB_CLIENT_ID and SCHWAB_CLIENT_SECRET must be set")
+    
+    # Schwab API requires Basic Authentication
+    credentials = f"{client_id}:{client_secret}"
+    encoded_credentials = base64.b64encode(credentials.encode()).decode()
+    
+    headers = {
+        "Authorization": f"Basic {encoded_credentials}",
+        "Content-Type": "application/x-www-form-urlencoded"
     }
     
-    response = requests.post(SCHWAB_TOKEN_URL, data=data, timeout=30)
-    response.raise_for_status()
+    data = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token
+    }
     
-    return response.json()
+    logger.info("Refreshing access token")
+    
+    try:
+        response = requests.post(SCHWAB_TOKEN_URL, headers=headers, data=data, timeout=30)
+        
+        if response.status_code != 200:
+            logger.error(f"Token refresh failed: {response.status_code}")
+            logger.error(f"Response: {response.text}")
+        
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.error(f"Token refresh error: {e}")
+        raise
 

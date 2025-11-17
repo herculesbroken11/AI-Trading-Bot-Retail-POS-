@@ -25,12 +25,16 @@ def save_tokens(tokens: Dict[str, Any]) -> None:
     with open(token_file, 'w') as f:
         json.dump(tokens, f, indent=2)
 
-def get_schwab_headers(access_token: str) -> Dict[str, str]:
+def get_schwab_headers(access_token: str, include_content_type: bool = False) -> Dict[str, str]:
     """Get headers for Schwab API requests"""
-    return {
+    headers = {
         "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json"
+        "Accept": "application/json"
     }
+    # Only include Content-Type for POST/PUT requests (with body)
+    if include_content_type:
+        headers["Content-Type"] = "application/json"
+    return headers
 
 def schwab_api_request(
     method: str,
@@ -52,7 +56,10 @@ def schwab_api_request(
     Returns:
         Response object
     """
-    headers = get_schwab_headers(access_token)
+    # GET/DELETE requests don't need Content-Type (no body)
+    # POST/PUT requests need Content-Type (have body)
+    include_content_type = method.upper() in ["POST", "PUT"]
+    headers = get_schwab_headers(access_token, include_content_type=include_content_type)
     
     try:
         if method.upper() == "GET":

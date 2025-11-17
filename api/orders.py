@@ -236,7 +236,10 @@ def execute_signal():
 def get_positions():
     """
     Get current positions.
+    Schwab API: GET /accounts/{accountNumber}/positions
     """
+    import requests
+    
     tokens = load_tokens()
     if not tokens or 'access_token' not in tokens:
         return jsonify({"error": "Not authenticated"}), 401
@@ -246,11 +249,53 @@ def get_positions():
         return jsonify({"error": "accountId required"}), 400
     
     try:
+        # Try the positions endpoint
         url = f"{SCHWAB_ACCOUNTS_URL}/{account_id}/positions"
-        response = schwab_api_request("GET", url, tokens['access_token'])
-        data = response.json()
+        headers = {
+            "Authorization": f"Bearer {tokens['access_token']}",
+            "Accept": "application/json"
+        }
         
+        logger.info(f"Requesting positions from: {url}")
+        response = requests.get(url, headers=headers, timeout=30)
+        
+        if response.status_code != 200:
+            logger.error(f"Positions request failed: {response.status_code}")
+            logger.error(f"Response: {response.text}")
+            
+            # Try alternative: get account details which includes positions
+            if response.status_code == 400:
+                logger.warning("Direct positions endpoint failed, trying account details...")
+                account_url = f"{SCHWAB_ACCOUNTS_URL}/{account_id}"
+                account_response = requests.get(account_url, headers=headers, timeout=30)
+                if account_response.status_code == 200:
+                    account_data = account_response.json()
+                    # Extract positions from account data if available
+                    positions = []
+                    if isinstance(account_data, list) and len(account_data) > 0:
+                        securities_account = account_data[0].get('securitiesAccount', {})
+                        positions = securities_account.get('positions', [])
+                    return jsonify({"positions": positions}), 200
+            
+            try:
+                error_data = response.json()
+                return jsonify({
+                    "error": f"Schwab API error: {response.status_code}",
+                    "details": error_data
+                }), response.status_code
+            except:
+                return jsonify({
+                    "error": f"Schwab API error: {response.status_code}",
+                    "details": response.text[:500]
+                }), response.status_code
+        
+        data = response.json()
+        logger.info("Retrieved positions successfully")
         return jsonify(data), 200
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Request exception getting positions: {e}")
+        return jsonify({"error": f"Request failed: {str(e)}"}), 500
     except Exception as e:
         logger.error(f"Failed to get positions: {e}")
         return jsonify({"error": str(e)}), 500

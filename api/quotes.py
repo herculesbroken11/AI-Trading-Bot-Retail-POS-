@@ -60,7 +60,7 @@ def get_historical(symbol: str):
     period_type = request.args.get('periodType', 'day')
     period = request.args.get('period', '1')
     frequency_type = request.args.get('frequencyType', 'minute')
-    frequency = request.args.get('frequency', '5')
+    frequency = request.args.get('frequency', '1')  # Default to 1 minute
     
     try:
         params = {
@@ -68,10 +68,12 @@ def get_historical(symbol: str):
             "periodType": period_type,
             "period": period,
             "frequencyType": frequency_type,
-            "frequency": frequency
+            "frequency": frequency,
+            "needExtendedHoursData": "false"
         }
         
         url = SCHWAB_HISTORICAL_URL
+        logger.info(f"Requesting historical data: {params}")
         response = schwab_api_request("GET", url, tokens['access_token'], params=params)
         data = response.json()
         
@@ -119,18 +121,33 @@ def analyze_symbol(symbol: str):
         return jsonify({"error": "Not authenticated"}), 401
     
     try:
-        # Get historical data
+        # Get historical data - use valid parameter combinations
+        # For intraday minute data, use periodType=day with appropriate period
+        # Try with extended hours data if needed
         params = {
             "symbol": symbol,
             "periodType": "day",
             "period": "1",
             "frequencyType": "minute",
-            "frequency": "5"
+            "frequency": "1",  # Try frequency=1 first (more common)
+            "needExtendedHoursData": "false"
         }
         
         url = SCHWAB_HISTORICAL_URL
-        response = schwab_api_request("GET", url, tokens['access_token'], params=params)
-        data = response.json()
+        logger.info(f"Requesting historical data with params: {params}")
+        
+        try:
+            response = schwab_api_request("GET", url, tokens['access_token'], params=params)
+            data = response.json()
+        except Exception as e:
+            # If frequency=1 fails, try frequency=5
+            if "frequency" in str(e).lower() or "400" in str(e):
+                logger.warning("Frequency=1 failed, trying frequency=5")
+                params["frequency"] = "5"
+                response = schwab_api_request("GET", url, tokens['access_token'], params=params)
+                data = response.json()
+            else:
+                raise
         
         if 'candles' not in data:
             return jsonify({"error": "No historical data available"}), 404

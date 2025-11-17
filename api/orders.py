@@ -2,6 +2,7 @@
 Trade execution API endpoints.
 """
 import os
+import requests
 from flask import Blueprint, request, jsonify
 from datetime import datetime, time
 from utils.logger import setup_logger
@@ -25,6 +26,7 @@ SCHWAB_ORDERS_URL = f"{SCHWAB_BASE_URL}/trader/v1/orders"
 def get_accounts():
     """
     Get list of trading accounts.
+    Schwab API requires accountNumbers parameter or returns all accounts.
     """
     tokens = load_tokens()
     if not tokens or 'access_token' not in tokens:
@@ -32,11 +34,42 @@ def get_accounts():
     
     try:
         url = SCHWAB_ACCOUNTS_URL
-        response = schwab_api_request("GET", url, tokens['access_token'])
-        data = response.json()
+        headers = {
+            "Authorization": f"Bearer {tokens['access_token']}",
+            "Accept": "application/json"
+        }
         
-        logger.info("Retrieved accounts")
+        logger.info(f"Requesting accounts from: {url}")
+        
+        # Try simple GET request first (no params)
+        response = requests.get(url, headers=headers, timeout=30)
+        
+        # Log response details for debugging
+        logger.info(f"Response status: {response.status_code}")
+        
+        if response.status_code != 200:
+            logger.error(f"Response text: {response.text}")
+            try:
+                error_data = response.json()
+                logger.error(f"Error details: {error_data}")
+                # Return more detailed error
+                return jsonify({
+                    "error": f"Schwab API error: {response.status_code}",
+                    "details": error_data
+                }), response.status_code
+            except:
+                return jsonify({
+                    "error": f"Schwab API error: {response.status_code}",
+                    "details": response.text[:500]  # First 500 chars
+                }), response.status_code
+        
+        data = response.json()
+        logger.info("Retrieved accounts successfully")
         return jsonify(data), 200
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Request exception getting accounts: {e}")
+        return jsonify({"error": f"Request failed: {str(e)}"}), 500
     except Exception as e:
         logger.error(f"Failed to get accounts: {e}")
         return jsonify({"error": str(e)}), 500

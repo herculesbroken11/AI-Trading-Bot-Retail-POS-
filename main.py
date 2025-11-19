@@ -12,6 +12,9 @@ from api.auth import auth_bp
 from api.quotes import quotes_bp
 from api.orders import orders_bp
 from api.reports import reports_bp
+from api.streaming import streaming_bp
+from api.automation import automation_bp
+from api.positions import positions_bp
 
 load_dotenv()
 
@@ -30,6 +33,9 @@ app.register_blueprint(auth_bp)
 app.register_blueprint(quotes_bp)
 app.register_blueprint(orders_bp)
 app.register_blueprint(reports_bp)
+app.register_blueprint(streaming_bp)
+app.register_blueprint(automation_bp)
+app.register_blueprint(positions_bp)
 
 @app.route('/', methods=['GET'])
 def index():
@@ -48,7 +54,9 @@ def index():
             "auth": "/auth/login - Start OAuth flow",
             "quotes": "/quotes/<symbol> - Get market data",
             "orders": "/orders/place - Place trade order",
-            "reports": "/reports/daily - Get daily report"
+            "reports": "/reports/daily - Get daily report",
+            "streaming": "/streaming/* - Real-time WebSocket quotes",
+            "automation": "/automation/* - Automated trading control"
         }
     }), 200
 
@@ -71,11 +79,20 @@ def trading_signal():
     
     return execute_signal()
 
+# Serve static files (dashboard)
+from flask import send_from_directory
+
+@app.route('/dashboard')
+def dashboard():
+    """Serve dashboard HTML."""
+    return send_from_directory('static', 'dashboard.html')
+
 if __name__ == '__main__':
     port = int(os.getenv('FLASK_PORT', 5035))
     host = os.getenv('FLASK_HOST', '0.0.0.0')
     debug = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
     
     logger.info(f"Starting Flask server on {host}:{port}")
+    logger.info(f"Dashboard available at: http://{host}:{port}/dashboard")
     app.run(host=host, port=port, debug=debug)
 

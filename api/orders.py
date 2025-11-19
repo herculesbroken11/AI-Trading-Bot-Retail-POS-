@@ -21,6 +21,8 @@ logger = setup_logger("orders")
 SCHWAB_BASE_URL = "https://api.schwabapi.com"
 SCHWAB_ACCOUNTS_URL = f"{SCHWAB_BASE_URL}/trader/v1/accounts"
 SCHWAB_ORDERS_URL = f"{SCHWAB_BASE_URL}/trader/v1/orders"
+SCHWAB_TRANSACTIONS_URL = f"{SCHWAB_BASE_URL}/trader/v1/accounts"
+SCHWAB_USER_PREF_URL = f"{SCHWAB_BASE_URL}/trader/v1/userPreference"
 
 @orders_bp.route('/accounts', methods=['GET'])
 def get_accounts():
@@ -120,9 +122,9 @@ def place_order():
         # Build order payload for Schwab API
         order_payload = build_order_payload(data)
         
-        # Place order
+        # Place order - Correct URL: /accounts/{accountNumber}/orders
         account_id = data["accountId"]
-        url = f"{SCHWAB_ORDERS_URL}/{account_id}/orders"
+        url = f"{SCHWAB_ACCOUNTS_URL}/{account_id}/orders"
         response = schwab_api_request("POST", url, tokens['access_token'], data=order_payload)
         order_response = response.json()
         
@@ -208,7 +210,7 @@ def execute_signal():
     try:
         order_payload = build_order_payload(order_data)
         account_id = signal["accountId"]
-        url = f"{SCHWAB_ORDERS_URL}/{account_id}/orders"
+        url = f"{SCHWAB_ACCOUNTS_URL}/{account_id}/orders"
         response = schwab_api_request("POST", url, tokens['access_token'], data=order_payload)
         order_response = response.json()
         
@@ -224,6 +226,209 @@ def execute_signal():
         }), 200
     except Exception as e:
         logger.error(f"Failed to execute signal: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@orders_bp.route('/account/<account_id>', methods=['GET'])
+def get_account(account_id: str):
+    """
+    Get a specific account balance and positions.
+    Schwab API: GET /accounts/{accountNumber}
+    """
+    tokens = load_tokens()
+    if not tokens or 'access_token' not in tokens:
+        return jsonify({"error": "Not authenticated"}), 401
+    
+    try:
+        url = f"{SCHWAB_ACCOUNTS_URL}/{account_id}"
+        response = schwab_api_request("GET", url, tokens['access_token'])
+        data = response.json()
+        
+        logger.info(f"Retrieved account {account_id}")
+        return jsonify(data), 200
+    except Exception as e:
+        logger.error(f"Failed to get account {account_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@orders_bp.route('/account-numbers', methods=['GET'])
+def get_account_numbers():
+    """
+    Get list of account numbers and their encrypted values.
+    Schwab API: GET /accounts/accountNumbers
+    """
+    tokens = load_tokens()
+    if not tokens or 'access_token' not in tokens:
+        return jsonify({"error": "Not authenticated"}), 401
+    
+    try:
+        url = f"{SCHWAB_ACCOUNTS_URL}/accountNumbers"
+        response = schwab_api_request("GET", url, tokens['access_token'])
+        data = response.json()
+        
+        logger.info("Retrieved account numbers")
+        return jsonify(data), 200
+    except Exception as e:
+        logger.error(f"Failed to get account numbers: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@orders_bp.route('/all-orders', methods=['GET'])
+def get_all_orders():
+    """
+    Get all orders for all accounts or a specific account.
+    Schwab API: GET /orders or GET /accounts/{accountNumber}/orders
+    
+    Query params:
+        accountId: Optional - if provided, get orders for specific account
+        maxResults: Max number of results (default: 3000)
+        fromEnteredTime: Start date/time
+        toEnteredTime: End date/time
+        status: Order status filter
+    """
+    tokens = load_tokens()
+    if not tokens or 'access_token' not in tokens:
+        return jsonify({"error": "Not authenticated"}), 401
+    
+    account_id = request.args.get('accountId')
+    max_results = request.args.get('maxResults', '3000')
+    from_entered_time = request.args.get('fromEnteredTime')
+    to_entered_time = request.args.get('toEnteredTime')
+    status = request.args.get('status')  # AWAITING_PARENT_ORDER, AWAITING_CONDITION, etc.
+    
+    try:
+        # If accountId provided, get orders for specific account
+        if account_id:
+            url = f"{SCHWAB_ACCOUNTS_URL}/{account_id}/orders"
+        else:
+            # Get all orders for all accounts
+            url = f"{SCHWAB_BASE_URL}/trader/v1/orders"
+        
+        params = {}
+        if max_results:
+            params['maxResults'] = max_results
+        if from_entered_time:
+            params['fromEnteredTime'] = from_entered_time
+        if to_entered_time:
+            params['toEnteredTime'] = to_entered_time
+        if status:
+            params['status'] = status
+        
+        response = schwab_api_request("GET", url, tokens['access_token'], params=params)
+        data = response.json()
+        
+        logger.info(f"Retrieved orders for {'account ' + account_id if account_id else 'all accounts'}")
+        return jsonify(data), 200
+    except Exception as e:
+        logger.error(f"Failed to get orders: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@orders_bp.route('/<account_id>/orders/<order_id>', methods=['GET'])
+def get_order(account_id: str, order_id: str):
+    """
+    Get a specific order by its ID.
+    Schwab API: GET /accounts/{accountNumber}/orders/{orderId}
+    """
+    tokens = load_tokens()
+    if not tokens or 'access_token' not in tokens:
+        return jsonify({"error": "Not authenticated"}), 401
+    
+    try:
+        url = f"{SCHWAB_ACCOUNTS_URL}/{account_id}/orders/{order_id}"
+        response = schwab_api_request("GET", url, tokens['access_token'])
+        data = response.json()
+        
+        logger.info(f"Retrieved order {order_id} for account {account_id}")
+        return jsonify(data), 200
+    except Exception as e:
+        logger.error(f"Failed to get order {order_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@orders_bp.route('/<account_id>/orders/<order_id>', methods=['DELETE'])
+def cancel_order(account_id: str, order_id: str):
+    """
+    Cancel an order for a specific account.
+    Schwab API: DELETE /accounts/{accountNumber}/orders/{orderId}
+    """
+    tokens = load_tokens()
+    if not tokens or 'access_token' not in tokens:
+        return jsonify({"error": "Not authenticated"}), 401
+    
+    try:
+        url = f"{SCHWAB_ACCOUNTS_URL}/{account_id}/orders/{order_id}"
+        response = schwab_api_request("DELETE", url, tokens['access_token'])
+        
+        logger.info(f"Cancelled order {order_id} for account {account_id}")
+        return jsonify({
+            "message": "Order cancelled successfully",
+            "order_id": order_id,
+            "account_id": account_id
+        }), 200
+    except Exception as e:
+        logger.error(f"Failed to cancel order {order_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@orders_bp.route('/<account_id>/orders/<order_id>', methods=['PUT'])
+def replace_order(account_id: str, order_id: str):
+    """
+    Replace an order for a specific account.
+    Schwab API: PUT /accounts/{accountNumber}/orders/{orderId}
+    
+    Request body: Same as place order
+    """
+    tokens = load_tokens()
+    if not tokens or 'access_token' not in tokens:
+        return jsonify({"error": "Not authenticated"}), 401
+    
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+    
+    try:
+        # Build order payload
+        order_payload = build_order_payload(data)
+        
+        url = f"{SCHWAB_ACCOUNTS_URL}/{account_id}/orders/{order_id}"
+        response = schwab_api_request("PUT", url, tokens['access_token'], data=order_payload)
+        order_response = response.json()
+        
+        logger.info(f"Replaced order {order_id} for account {account_id}")
+        return jsonify({
+            "message": "Order replaced successfully",
+            "order": order_response
+        }), 200
+    except Exception as e:
+        logger.error(f"Failed to replace order {order_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@orders_bp.route('/<account_id>/preview', methods=['POST'])
+def preview_order(account_id: str):
+    """
+    Preview an order before placing it.
+    Schwab API: POST /accounts/{accountNumber}/previewOrder
+    
+    Request body: Same as place order
+    """
+    tokens = load_tokens()
+    if not tokens or 'access_token' not in tokens:
+        return jsonify({"error": "Not authenticated"}), 401
+    
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+    
+    try:
+        # Build order payload
+        order_payload = build_order_payload(data)
+        
+        url = f"{SCHWAB_ACCOUNTS_URL}/{account_id}/previewOrder"
+        response = schwab_api_request("POST", url, tokens['access_token'], data=order_payload)
+        preview_response = response.json()
+        
+        logger.info(f"Previewed order for account {account_id}")
+        return jsonify({
+            "message": "Order preview generated",
+            "preview": preview_response
+        }), 200
+    except Exception as e:
+        logger.error(f"Failed to preview order: {e}")
         return jsonify({"error": str(e)}), 500
 
 @orders_bp.route('/positions', methods=['GET'])
@@ -390,4 +595,97 @@ def log_trade(order_data: dict, order_response: dict, signal: dict = None):
         ])
     
     logger.info(f"Trade logged to {csv_path}")
+
+# ============================================================================
+# Transactions Endpoints
+# ============================================================================
+
+@orders_bp.route('/<account_id>/transactions', methods=['GET'])
+def get_transactions(account_id: str):
+    """
+    Get all transactions for a specific account.
+    Schwab API: GET /accounts/{accountNumber}/transactions
+    
+    Query params:
+        startDate: YYYY-MM-DD
+        endDate: YYYY-MM-DD
+        symbol: Filter by symbol
+        types: Transaction types (TRADE, RECEIVE_AND_DELIVER, DIVIDEND_OR_INTEREST, etc.)
+    """
+    tokens = load_tokens()
+    if not tokens or 'access_token' not in tokens:
+        return jsonify({"error": "Not authenticated"}), 401
+    
+    start_date = request.args.get('startDate')
+    end_date = request.args.get('endDate')
+    symbol = request.args.get('symbol')
+    transaction_types = request.args.get('types')
+    
+    try:
+        url = f"{SCHWAB_TRANSACTIONS_URL}/{account_id}/transactions"
+        
+        params = {}
+        if start_date:
+            params['startDate'] = start_date
+        if end_date:
+            params['endDate'] = end_date
+        if symbol:
+            params['symbol'] = symbol
+        if transaction_types:
+            params['types'] = transaction_types
+        
+        response = schwab_api_request("GET", url, tokens['access_token'], params=params)
+        data = response.json()
+        
+        logger.info(f"Retrieved transactions for account {account_id}")
+        return jsonify(data), 200
+    except Exception as e:
+        logger.error(f"Failed to get transactions: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@orders_bp.route('/<account_id>/transactions/<transaction_id>', methods=['GET'])
+def get_transaction(account_id: str, transaction_id: str):
+    """
+    Get specific transaction information for an account.
+    Schwab API: GET /accounts/{accountNumber}/transactions/{transactionId}
+    """
+    tokens = load_tokens()
+    if not tokens or 'access_token' not in tokens:
+        return jsonify({"error": "Not authenticated"}), 401
+    
+    try:
+        url = f"{SCHWAB_TRANSACTIONS_URL}/{account_id}/transactions/{transaction_id}"
+        response = schwab_api_request("GET", url, tokens['access_token'])
+        data = response.json()
+        
+        logger.info(f"Retrieved transaction {transaction_id} for account {account_id}")
+        return jsonify(data), 200
+    except Exception as e:
+        logger.error(f"Failed to get transaction {transaction_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# ============================================================================
+# User Preferences Endpoint
+# ============================================================================
+
+@orders_bp.route('/user-preference', methods=['GET'])
+def get_user_preference():
+    """
+    Get user preference information.
+    Schwab API: GET /userPreference
+    """
+    tokens = load_tokens()
+    if not tokens or 'access_token' not in tokens:
+        return jsonify({"error": "Not authenticated"}), 401
+    
+    try:
+        url = SCHWAB_USER_PREF_URL
+        response = schwab_api_request("GET", url, tokens['access_token'])
+        data = response.json()
+        
+        logger.info("Retrieved user preferences")
+        return jsonify(data), 200
+    except Exception as e:
+        logger.error(f"Failed to get user preferences: {e}")
+        return jsonify({"error": str(e)}), 500
 

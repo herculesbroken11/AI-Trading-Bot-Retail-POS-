@@ -81,10 +81,41 @@ def callback():
         save_tokens(tokens)
         logger.info("Tokens saved successfully")
         
+        # Auto-start automation scheduler if enabled
+        auto_start = os.getenv("AUTO_START_SCHEDULER", "true").lower() == "true"
+        scheduler_status = None
+        
+        if auto_start:
+            try:
+                from core.scheduler import TradingScheduler
+                import threading
+                import api.automation as automation_module
+                
+                # Check if scheduler is already running
+                if automation_module.scheduler and automation_module.scheduler.is_running:
+                    scheduler_status = "already_running"
+                else:
+                    # Start scheduler directly
+                    automation_module.scheduler = TradingScheduler()
+                    automation_module.scheduler_thread = threading.Thread(
+                        target=automation_module.scheduler.start
+                    )
+                    automation_module.scheduler_thread.daemon = True
+                    automation_module.scheduler_thread.start()
+                    scheduler_status = "started"
+                    logger.info("Automation scheduler started automatically after authentication")
+            except Exception as e:
+                logger.warning(f"Failed to auto-start scheduler: {e}")
+                scheduler_status = f"failed: {str(e)}"
+        
         return jsonify({
             "message": "Authentication successful",
             "access_token": tokens.get("access_token", "")[:20] + "...",
-            "expires_in": tokens.get("expires_in")
+            "expires_in": tokens.get("expires_in"),
+            "automation": {
+                "auto_started": auto_start,
+                "status": scheduler_status
+            }
         }), 200
     except Exception as e:
         logger.error(f"Token exchange failed: {e}")

@@ -22,7 +22,20 @@ class TradingAIAnalyzer:
         if not api_key:
             raise ValueError("OPENAI_API_KEY not configured")
         
-        self.client = OpenAI(api_key=api_key)
+        # Initialize OpenAI client
+        # Note: OpenAI library v1.3.0 may have issues with proxy env vars
+        # We explicitly only pass api_key to avoid any argument conflicts
+        try:
+            # Create client with only api_key parameter
+            client_kwargs = {"api_key": api_key}
+            self.client = OpenAI(**client_kwargs)
+        except TypeError as e:
+            # If there's a TypeError about unexpected arguments, log and re-raise
+            # This helps identify if there are environment variables causing issues
+            logger.error(f"Failed to initialize OpenAI client: {e}")
+            logger.error("This may be caused by proxy environment variables or OpenAI library version mismatch")
+            raise ValueError(f"OpenAI client initialization failed: {e}. Please check OPENAI_API_KEY and library version.")
+        
         self.model = "gpt-4o"  # Using GPT-4o as GPT-5 is not yet available
     
     def analyze_market_data(

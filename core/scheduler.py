@@ -25,9 +25,29 @@ class TradingScheduler:
     def __init__(self):
         self.ov_engine = OVStrategyEngine()
         self.position_manager = PositionManager()
-        self.ai_analyzer = TradingAIAnalyzer()
+        # Lazy initialization of AI analyzer to avoid import errors at startup
+        self.ai_analyzer = None
         self.watchlist = self._load_watchlist()
         self.is_running = False
+    
+    def _get_ai_analyzer(self):
+        """Get or initialize AI analyzer (lazy initialization)."""
+        if self.ai_analyzer is None:
+            try:
+                self.ai_analyzer = TradingAIAnalyzer()
+            except Exception as e:
+                logger.error(f"Failed to initialize AI analyzer: {e}")
+                logger.warning("Trading will continue without AI validation")
+                # Return a dummy analyzer that always returns HOLD
+                class DummyAnalyzer:
+                    def analyze_market_data(self, symbol, market_summary, setup):
+                        return {
+                            "action": "HOLD",
+                            "confidence": 0.0,
+                            "reasoning": "AI analyzer unavailable"
+                        }
+                self.ai_analyzer = DummyAnalyzer()
+        return self.ai_analyzer
         
     def _load_watchlist(self) -> List[str]:
         """Load trading watchlist from environment or file."""
@@ -117,9 +137,10 @@ class TradingScheduler:
                     logger.debug(f"{symbol}: 4 Fantastics not met")
                     continue
                 
-                # AI analysis
-                market_summary = self.ov_engine.get_market_summary(df)
-                ai_signal = self.ai_analyzer.analyze_market_data(symbol, market_summary, setup)
+                    # AI analysis
+                    market_summary = self.ov_engine.get_market_summary(df)
+                    ai_analyzer = self._get_ai_analyzer()
+                    ai_signal = ai_analyzer.analyze_market_data(symbol, market_summary, setup)
                 
                 # Only execute if AI confirms and confidence > 0.7
                 if ai_signal.get('action') in ['BUY', 'SELL'] and ai_signal.get('confidence', 0) > 0.7:

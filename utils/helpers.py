@@ -161,6 +161,16 @@ def schwab_api_request(
         
         response.raise_for_status()
         return response
+    except requests.exceptions.HTTPError as e:
+        # For 400/401/403 errors, try to include response body for better debugging
+        error_msg = str(e)
+        if hasattr(e.response, 'text') and e.response.text:
+            try:
+                error_body = e.response.json()
+                error_msg = f"{error_msg}. Response: {error_body}"
+            except:
+                error_msg = f"{error_msg}. Response body: {e.response.text[:500]}"
+        raise Exception(f"Schwab API request failed: {error_msg}")
     except requests.exceptions.RequestException as e:
         raise Exception(f"Schwab API request failed: {str(e)}")
 

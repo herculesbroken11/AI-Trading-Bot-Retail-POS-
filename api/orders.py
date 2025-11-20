@@ -636,8 +636,28 @@ def preview_order(account_id: str):
             logger.warning(f"Could not get hash value for {account_id}, trying plain text: {e}")
             account_hash = account_id
         url = f"{SCHWAB_ACCOUNTS_URL}/{account_hash}/previewOrder"
-        response = schwab_api_request("POST", url, tokens['access_token'], data=order_payload)
-        preview_response = response.json()
+        
+        # Log the payload for debugging
+        logger.info(f"Preview order payload: {order_payload}")
+        
+        try:
+            response = schwab_api_request("POST", url, tokens['access_token'], data=order_payload)
+            preview_response = response.json()
+        except Exception as api_error:
+            # Try to get more details from the error
+            error_str = str(api_error)
+            logger.error(f"Preview order API error: {error_str}")
+            logger.error(f"Order payload sent: {order_payload}")
+            
+            # If it's a 400 error, try to get response body if available
+            if "400" in error_str or "Bad Request" in error_str:
+                return jsonify({
+                    "error": "Bad request to Schwab API",
+                    "details": error_str,
+                    "payload_sent": order_payload,
+                    "suggestion": "Check order payload structure. Ensure all required fields are present and valid."
+                }), 400
+            raise
         
         logger.info(f"Previewed order for account {account_id}")
         
@@ -856,23 +876,30 @@ def build_order_payload(data: dict) -> dict:
     if order_type == "LIMIT":
         if "price" in data:
             payload["price"] = float(data["price"])
-            payload["priceLinkBasis"] = "MANUAL"
-            payload["priceLinkType"] = "VALUE"
+            # priceLinkBasis and priceLinkType are optional - only add if specified
+            # Some API versions may not accept these fields
+            if "priceLinkBasis" in data:
+                payload["priceLinkBasis"] = data["priceLinkBasis"]
+            if "priceLinkType" in data:
+                payload["priceLinkType"] = data["priceLinkType"]
         else:
             raise ValueError("LIMIT orders require a price")
     
     # Add stop price for STOP orders (according to API docs)
-    if order_type == "STOP":
+    if order_type == "STOP" or order_type == "STOP_LIMIT":
         if "stopPrice" in data:
             payload["stopPrice"] = float(data["stopPrice"])
-            payload["stopPriceLinkBasis"] = "MANUAL"
-            payload["stopPriceLinkType"] = "VALUE"
-            payload["stopType"] = "STANDARD"
+            # stopPriceLinkBasis, stopPriceLinkType, and stopType are optional
+            if "stopPriceLinkBasis" in data:
+                payload["stopPriceLinkBasis"] = data["stopPriceLinkBasis"]
+            if "stopPriceLinkType" in data:
+                payload["stopPriceLinkType"] = data["stopPriceLinkType"]
+            if "stopType" in data:
+                payload["stopType"] = data["stopType"]
         else:
-            raise ValueError("STOP orders require a stopPrice")
+            raise ValueError(f"{order_type} orders require a stopPrice")
     
-    # Add tax lot method (default FIFO)
-    payload["taxLotMethod"] = data.get("taxLotMethod", "FIFO")
+    # Note: taxLotMethod is already set above, don't set it twice
     
     return payload
 

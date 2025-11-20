@@ -130,28 +130,50 @@ class OVStrategyEngine:
             Dictionary with each fantastic condition status
         """
         if df.empty:
-            return {"fantastic_1": False, "fantastic_2": False, "fantastic_3": False, "fantastic_4": False}
+            return {
+                "fantastic_1": False,
+                "fantastic_2": False,
+                "fantastic_3": False,
+                "fantastic_4": False,
+                "all_fantastics": False
+            }
         
         latest = df.iloc[-1]
         
+        # Check if required indicator columns exist
+        required_cols = ['sma_aligned_bullish', 'sma_aligned_bearish', 'above_sma200', 'volume', 'volume_ma', 'rsi_14']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        
+        if missing_cols:
+            logger.warning(f"Missing indicator columns for 4 Fantastics check: {missing_cols}")
+            return {
+                "fantastic_1": False,
+                "fantastic_2": False,
+                "fantastic_3": False,
+                "fantastic_4": False,
+                "all_fantastics": False
+            }
+        
         # Fantastic 1: Trend Alignment
         fantastic_1 = (
-            (latest['sma_aligned_bullish'] and latest['above_sma200']) or
-            (latest['sma_aligned_bearish'] and not latest['above_sma200'])
+            (latest.get('sma_aligned_bullish', False) and latest.get('above_sma200', False)) or
+            (latest.get('sma_aligned_bearish', False) and not latest.get('above_sma200', True))
         )
         
         # Fantastic 2: Price position relative to SMA200
         fantastic_2 = (
-            (latest['above_sma200'] and latest['sma_aligned_bullish']) or
-            (not latest['above_sma200'] and latest['sma_aligned_bearish'])
+            (latest.get('above_sma200', False) and latest.get('sma_aligned_bullish', False)) or
+            (not latest.get('above_sma200', True) and latest.get('sma_aligned_bearish', False))
         )
         
         # Fantastic 3: Volume confirmation
-        fantastic_3 = latest['volume'] > latest['volume_ma'] * 1.2
+        volume = latest.get('volume', 0)
+        volume_ma = latest.get('volume_ma', 1)
+        fantastic_3 = volume > volume_ma * 1.2 if volume_ma > 0 else False
         
         # Fantastic 4: RSI in favorable zone
-        rsi = latest['rsi_14']
-        if latest['above_sma200']:
+        rsi = latest.get('rsi_14', 50)  # Default to 50 if missing
+        if latest.get('above_sma200', False):
             fantastic_4 = 30 < rsi < 70  # Not overbought for longs
         else:
             fantastic_4 = 30 < rsi < 70  # Not oversold for shorts
@@ -391,6 +413,15 @@ class OVStrategyEngine:
             Dictionary with setup information or None
         """
         if df.empty or len(df) < 2:
+            return None
+        
+        # Check if required indicator columns exist
+        required_cols = ['sma_8', 'sma_20', 'sma_200', 'atr_14', 'rsi_14', 'volume', 'volume_ma',
+                        'above_sma200', 'sma_aligned_bullish', 'sma_aligned_bearish']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        
+        if missing_cols:
+            logger.warning(f"Missing indicator columns for setup identification: {missing_cols}")
             return None
         
         latest = df.iloc[-1]

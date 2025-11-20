@@ -118,14 +118,68 @@ class TradingScheduler:
                     logger.warning(f"No data for {symbol}")
                     continue
                 
-                # Convert to DataFrame
-                import pandas as pd
                 candles = historical_data['candles']
-                df = pd.DataFrame(candles)
-                df.columns = ['datetime', 'open', 'high', 'low', 'close', 'volume']
+                if not candles or len(candles) == 0:
+                    logger.warning(f"Empty candles array for {symbol}")
+                    continue
+                
+                # Convert to DataFrame - handle both dict and array formats
+                import pandas as pd
+                if isinstance(candles[0], dict):
+                    # Dictionary format - use directly
+                    df = pd.DataFrame(candles)
+                    if 'datetime' in df.columns:
+                        df['datetime'] = pd.to_datetime(df['datetime'], unit='ms')
+                    elif 'time' in df.columns:
+                        df['datetime'] = pd.to_datetime(df['time'], unit='ms')
+                        df = df.rename(columns={'time': 'datetime'})
+                else:
+                    # Array format - need to detect column order (same logic as quotes.py)
+                    df = pd.DataFrame(candles)
+                    if len(df.columns) == 6:
+                        # Auto-detect column order
+                        raw_values = [float(df.iloc[0, i]) for i in range(6)]
+                        datetime_idx = raw_values.index(max(raw_values))
+                        non_datetime = [(i, v) for i, v in enumerate(raw_values) if i != datetime_idx]
+                        volume_candidates = [(i, v) for i, v in non_datetime if 1e6 <= v < 1e10]
+                        volume_idx = volume_candidates[0][0] if volume_candidates else non_datetime[-1][0]
+                        price_indices = [i for i in range(6) if i not in [datetime_idx, volume_idx]]
+                        price_vals = [(i, raw_values[i]) for i in price_indices]
+                        price_vals.sort(key=lambda x: x[1])
+                        low_idx = price_vals[0][0]
+                        high_idx = price_vals[-1][0]
+                        open_idx = price_vals[1][0] if len(price_vals) > 1 else price_indices[0]
+                        close_idx = price_vals[2][0] if len(price_vals) > 2 else price_indices[1]
+                        col_map = [''] * 6
+                        col_map[datetime_idx] = 'datetime'
+                        col_map[open_idx] = 'open'
+                        col_map[high_idx] = 'high'
+                        col_map[low_idx] = 'low'
+                        col_map[close_idx] = 'close'
+                        col_map[volume_idx] = 'volume'
+                        df.columns = col_map
+                        df['datetime'] = pd.to_datetime(df['datetime'], unit='ms')
+                    else:
+                        logger.warning(f"Unexpected candle format for {symbol}: {len(df.columns)} columns")
+                        continue
+                
+                # Ensure numeric types
+                for col in ['open', 'high', 'low', 'close', 'volume']:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors='coerce')
+                
+                # Check if we have enough data before calculating indicators
+                if len(df) < 200:
+                    logger.warning(f"Insufficient data for {symbol}: only {len(df)} candles (need 200+)")
+                    continue
                 
                 # Calculate indicators
                 df = self.ov_engine.calculate_indicators(df)
+                
+                # Check if indicators were calculated (they might not be if data is still insufficient)
+                if 'sma_8' not in df.columns or 'sma_20' not in df.columns or 'sma_200' not in df.columns:
+                    logger.warning(f"Indicators not calculated for {symbol} - insufficient data")
+                    continue
                 
                 # Identify setup
                 setup = self.ov_engine.identify_setup(df)

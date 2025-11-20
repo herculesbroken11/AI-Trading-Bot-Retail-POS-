@@ -12,7 +12,7 @@ from core.ov_engine import OVStrategyEngine
 from core.position_manager import PositionManager
 from ai.analyze import TradingAIAnalyzer
 from api.orders import execute_signal_helper
-from utils.helpers import load_tokens, schwab_api_request
+from utils.helpers import get_valid_access_token, schwab_api_request
 from api.quotes import SCHWAB_HISTORICAL_URL, SCHWAB_QUOTES_URL
 
 logger = setup_logger("scheduler")
@@ -91,8 +91,9 @@ class TradingScheduler:
         
         logger.info("Starting automated market analysis...")
         
-        tokens = load_tokens()
-        if not tokens or 'access_token' not in tokens:
+        # Get valid access token (automatically refreshed if needed)
+        access_token = get_valid_access_token()
+        if not access_token:
             logger.error("Not authenticated - cannot analyze")
             return
         
@@ -109,7 +110,8 @@ class TradingScheduler:
                 }
                 
                 url = SCHWAB_HISTORICAL_URL
-                response = schwab_api_request("GET", url, tokens['access_token'], params=params)
+                # Token is automatically refreshed if needed by schwab_api_request
+                response = schwab_api_request("GET", url, access_token, params=params)
                 historical_data = response.json()
                 
                 if not historical_data or 'candles' not in historical_data:
@@ -148,7 +150,7 @@ class TradingScheduler:
                     
                     # Execute signal
                     try:
-                        result = execute_signal_helper(ai_signal, tokens['access_token'])
+                        result = execute_signal_helper(ai_signal, access_token)
                         if result and result.get('status') == 'success':
                             # Add to position manager
                             position = {
@@ -195,9 +197,11 @@ class TradingScheduler:
         
         # Get current prices for all symbols
         price_data = {}
-        tokens = load_tokens()
+        # Get valid access token (automatically refreshed if needed)
+        access_token = get_valid_access_token()
         
-        if not tokens or 'access_token' not in tokens:
+        if not access_token:
+            logger.warning("Not authenticated - cannot update positions")
             return
         
         for position in positions:
@@ -205,7 +209,7 @@ class TradingScheduler:
             try:
                 # Get quote directly from Schwab API
                 url = f"{SCHWAB_QUOTES_URL}?symbols={symbol}"
-                response = schwab_api_request("GET", url, tokens['access_token'])
+                response = schwab_api_request("GET", url, access_token)
                 quote = response.json()
                 
                 # Extract price from Schwab quote format

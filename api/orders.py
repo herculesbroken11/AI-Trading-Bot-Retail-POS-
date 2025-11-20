@@ -587,37 +587,68 @@ def get_positions():
         return jsonify({"error": "accountId required"}), 400
     
     try:
-        # Schwab API: Use /accounts/{accountNumber}?fields=positions
-        # According to API docs: GET /accounts/{accountNumber}?fields=positions returns specific account with positions
-        # This is more efficient than getting all accounts when we know the account number
+        # Schwab API: GET /accounts/{accountNumber}
+        # According to the API response you provided, positions are included in the response
+        # but the 'positions' field may be missing if there are no open positions
+        # The fields=positions parameter may not be needed or may not work at the account-specific endpoint
         
         account_url = f"{SCHWAB_ACCOUNTS_URL}/{account_id}"
-        params = {"fields": "positions"}
-        logger.info(f"Requesting account {account_id} with positions from: {account_url}?fields=positions")
+        logger.info(f"Requesting account {account_id} details to get positions")
         
-        account_response = schwab_api_request("GET", account_url, tokens['access_token'], params=params)
+        # Get account details - positions should be included if they exist
+        # Don't use fields parameter at account-specific endpoint (causes 400 error)
+        account_response = schwab_api_request("GET", account_url, tokens['access_token'])
         account_data = account_response.json()
         
         # Extract positions from account data
+        # Schwab API returns account data in different formats
         positions = []
-        if isinstance(account_data, list) and len(account_data) > 0:
-            securities_account = account_data[0].get('securitiesAccount', {})
-            positions = securities_account.get('positions', [])
-            logger.info(f"Found {len(positions)} positions for account {account_id}")
-        elif isinstance(account_data, dict):
-            securities_account = account_data.get('securitiesAccount', {})
-            positions = securities_account.get('positions', [])
-            logger.info(f"Found {len(positions)} positions for account {account_id}")
         
+        # Handle array response format (when getting all accounts)
+        if isinstance(account_data, list) and len(account_data) > 0:
+            account_item = account_data[0]
+            # Check if it's wrapped in securitiesAccount
+            if 'securitiesAccount' in account_item:
+                securities_account = account_item.get('securitiesAccount', {})
+                # Positions field may not exist if account has no positions
+                positions = securities_account.get('positions', [])
+            else:
+                # Direct account object
+                positions = account_item.get('positions', [])
+            logger.info(f"Found {len(positions)} positions for account {account_id} (array format)")
+        
+        # Handle dict response format (when getting specific account)
+        elif isinstance(account_data, dict):
+            # Check if it's wrapped in securitiesAccount
+            if 'securitiesAccount' in account_data:
+                securities_account = account_data.get('securitiesAccount', {})
+                # Positions field may not exist if account has no positions - this is normal
+                positions = securities_account.get('positions', [])
+                logger.info(f"Account {account_id} has {len(positions)} positions (dict format with securitiesAccount)")
+            else:
+                # Direct account object
+                positions = account_data.get('positions', [])
+                logger.info(f"Account {account_id} has {len(positions)} positions (dict format direct)")
+        
+        # Return positions (empty array if no positions - this is normal)
         return jsonify({
             "positions": positions,
             "account_id": account_id,
-            "count": len(positions)
+            "count": len(positions),
+            "message": "No open positions" if len(positions) == 0 else f"{len(positions)} position(s) found"
         }), 200
         
     except Exception as e:
         logger.error(f"Failed to get positions: {e}")
-        return jsonify({"error": str(e)}), 500
+        # Provide more detailed error information
+        error_msg = str(e)
+        if "400" in error_msg:
+            return jsonify({
+                "error": "Bad request to Schwab API. The account may not exist or the API format may have changed.",
+                "details": error_msg,
+                "suggestion": "Try calling GET /orders/accounts first to verify the account ID"
+            }), 400
+        return jsonify({"error": error_msg}), 500
 
 def build_order_payload(data: dict) -> dict:
     """

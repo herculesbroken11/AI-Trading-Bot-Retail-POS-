@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, List
 from utils.logger import setup_logger
-from utils.helpers import load_tokens, schwab_api_request
+from utils.helpers import get_valid_access_token, schwab_api_request
 from api.orders import SCHWAB_ACCOUNTS_URL
 
 logger = setup_logger("position_manager")
@@ -266,8 +266,9 @@ class PositionManager:
         if not positions:
             return []
         
-        tokens = load_tokens()
-        if not tokens or 'access_token' not in tokens:
+        # Get valid access token (automatically refreshed if needed)
+        access_token = get_valid_access_token()
+        if not access_token:
             logger.error("Not authenticated - cannot close positions")
             return []
         
@@ -303,7 +304,7 @@ class PositionManager:
                 }
                 
                 url = f"{SCHWAB_ACCOUNTS_URL}/{account_id}/orders"
-                response = schwab_api_request("POST", url, tokens['access_token'], data=order)
+                response = schwab_api_request("POST", url, access_token, data=order)
                 
                 if response.status_code == 201:
                     logger.info(f"Closed position: {symbol} ({quantity} shares)")

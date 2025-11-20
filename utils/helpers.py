@@ -4,11 +4,14 @@ Helper utilities for HTTP requests, data processing, and common operations.
 import os
 import json
 import requests
+import time
 from pathlib import Path
 from typing import Dict, Any, Optional
 from dotenv import load_dotenv
+from utils.logger import setup_logger
 
 load_dotenv()
+logger = setup_logger("helpers")
 
 def load_tokens() -> Optional[Dict[str, Any]]:
     """Load tokens from /data/tokens.json"""
@@ -19,9 +22,26 @@ def load_tokens() -> Optional[Dict[str, Any]]:
     return None
 
 def save_tokens(tokens: Dict[str, Any]) -> None:
-    """Save tokens to /data/tokens.json"""
+    """
+    Save tokens to /data/tokens.json
+    Also calculates and stores expires_at timestamp for automatic refresh.
+    """
     token_file = Path("data/tokens.json")
     token_file.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Calculate expiration timestamp if expires_in is provided
+    if 'expires_in' in tokens and 'expires_at' not in tokens:
+        # expires_in is in seconds, calculate absolute timestamp
+        expires_in = int(tokens.get('expires_in', 1800))  # Default 30 minutes
+        expires_at = time.time() + expires_in - 300  # Refresh 5 minutes before expiration
+        tokens['expires_at'] = expires_at
+        logger.info(f"Token expires in {expires_in}s, will refresh at {expires_at} (5 min buffer)")
+    elif 'expires_in' in tokens:
+        # Update expires_at if expires_in changed
+        expires_in = int(tokens.get('expires_in', 1800))
+        expires_at = time.time() + expires_in - 300
+        tokens['expires_at'] = expires_at
+    
     with open(token_file, 'w') as f:
         json.dump(tokens, f, indent=2)
 
@@ -36,26 +56,92 @@ def get_schwab_headers(access_token: str, include_content_type: bool = False) ->
         headers["Content-Type"] = "application/json"
     return headers
 
+def ensure_valid_token() -> Optional[str]:
+    """
+    Ensure access token is valid and refresh if needed.
+    Automatically refreshes token if it's about to expire (within 5 minutes).
+    
+    Returns:
+        Valid access token, or None if refresh failed
+    """
+    tokens = load_tokens()
+    if not tokens:
+        logger.warning("No tokens found")
+        return None
+    
+    if 'access_token' not in tokens:
+        logger.warning("No access token found")
+        return None
+    
+    # Check if token is about to expire
+    current_time = time.time()
+    expires_at = tokens.get('expires_at')
+    
+    if expires_at and current_time >= expires_at:
+        # Token expired or about to expire, refresh it
+        logger.info("Token expired or about to expire, refreshing...")
+        
+        if 'refresh_token' not in tokens:
+            logger.error("No refresh token available for automatic refresh")
+            return None
+        
+        try:
+            from api.auth import refresh_access_token
+            new_tokens = refresh_access_token(tokens['refresh_token'])
+            save_tokens(new_tokens)
+            logger.info("Token automatically refreshed successfully")
+            return new_tokens.get('access_token')
+        except Exception as e:
+            logger.error(f"Automatic token refresh failed: {e}")
+            return None
+    
+    # Token is still valid
+    return tokens.get('access_token')
+
+def get_valid_access_token() -> Optional[str]:
+    """
+    Get a valid access token, automatically refreshing if needed.
+    This is a convenience wrapper around ensure_valid_token().
+    
+    Returns:
+        Valid access token, or None if not available
+    """
+    return ensure_valid_token()
+
 def schwab_api_request(
     method: str,
     url: str,
-    access_token: str,
+    access_token: Optional[str] = None,
     params: Optional[Dict] = None,
     data: Optional[Dict] = None
 ) -> requests.Response:
     """
     Make a request to Schwab API with proper error handling.
+    Automatically ensures token is valid before making request.
     
     Args:
         method: HTTP method (GET, POST, etc.)
         url: API endpoint URL
-        access_token: OAuth access token
+        access_token: OAuth access token (optional - will auto-load and refresh if not provided)
         params: Query parameters
         data: Request body data
         
     Returns:
         Response object
     """
+    # Always ensure token is valid before making request (auto-refresh if needed)
+    # If access_token provided, we still check if it needs refresh
+    # If not provided, we load it automatically
+    if access_token is None:
+        access_token = ensure_valid_token()
+        if not access_token:
+            raise Exception("No valid access token available. Please authenticate.")
+    else:
+        # Even if token provided, check if it needs refresh
+        valid_token = ensure_valid_token()
+        if valid_token:
+            access_token = valid_token
+    
     # GET/DELETE requests don't need Content-Type (no body)
     # POST/PUT requests need Content-Type (have body)
     include_content_type = method.upper() in ["POST", "PUT"]

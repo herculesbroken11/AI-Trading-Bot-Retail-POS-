@@ -141,6 +141,75 @@ def place_order():
         logger.error(f"Failed to place order: {e}")
         return jsonify({"error": str(e)}), 500
 
+def execute_signal_helper(signal: dict, access_token: str) -> dict:
+    """
+    Helper function to execute a trading signal (can be called directly).
+    
+    Args:
+        signal: Signal dictionary with symbol, action, entry, stop, target, etc.
+        access_token: Schwab API access token
+        
+    Returns:
+        Dictionary with status, order response, and account_id
+    """
+    # Validate signal
+    is_valid, error_msg = validate_trade_signal(signal)
+    if not is_valid:
+        raise ValueError(error_msg)
+    
+    # Get account ID if not provided
+    if "accountId" not in signal:
+        try:
+            accounts_response = schwab_api_request("GET", SCHWAB_ACCOUNTS_URL, access_token)
+            accounts = accounts_response.json()
+            if accounts and len(accounts) > 0:
+                signal["accountId"] = accounts[0].get("accountNumber", "")
+            else:
+                raise ValueError("No accounts found")
+        except Exception as e:
+            logger.error(f"Failed to get accounts: {e}")
+            raise ValueError("Could not retrieve account")
+    
+    # Calculate position size if not provided
+    if "position_size" not in signal or signal["position_size"] == 0:
+        # Get account value (simplified - should fetch actual account value)
+        account_value = 10000  # Default
+        signal["position_size"] = calculate_position_size(
+            account_value,
+            signal["entry"],
+            signal["stop"],
+            MAX_TRADE_AMOUNT
+        )
+    
+    # Build order
+    order_data = {
+        "symbol": signal["symbol"],
+        "action": signal["action"],
+        "quantity": signal["position_size"],
+        "orderType": "LIMIT",  # Use LIMIT for better execution
+        "price": signal["entry"],
+        "stopPrice": signal["stop"],
+        "accountId": signal["accountId"]
+    }
+    
+    order_payload = build_order_payload(order_data)
+    account_id = signal["accountId"]
+    url = f"{SCHWAB_ACCOUNTS_URL}/{account_id}/orders"
+    response = schwab_api_request("POST", url, access_token, data=order_payload)
+    order_response = response.json()
+    
+    logger.info(f"Signal executed: {signal['symbol']} {signal['action']} @ {signal['entry']}")
+    
+    # Log trade
+    log_trade(order_data, order_response, signal)
+    
+    return {
+        "status": "success",
+        "order": order_response,
+        "account_id": account_id,
+        "signal": signal
+    }
+
 @orders_bp.route('/signal', methods=['POST'])
 def execute_signal():
     """
@@ -167,63 +236,15 @@ def execute_signal():
     if not signal:
         return jsonify({"error": "No signal provided"}), 400
     
-    # Validate signal
-    is_valid, error_msg = validate_trade_signal(signal)
-    if not is_valid:
-        return jsonify({"error": error_msg}), 400
-    
-    # Get account ID if not provided
-    if "accountId" not in signal:
-        try:
-            accounts_response = schwab_api_request("GET", SCHWAB_ACCOUNTS_URL, tokens['access_token'])
-            accounts = accounts_response.json()
-            if accounts and len(accounts) > 0:
-                signal["accountId"] = accounts[0].get("accountNumber", "")
-            else:
-                return jsonify({"error": "No accounts found"}), 400
-        except Exception as e:
-            logger.error(f"Failed to get accounts: {e}")
-            return jsonify({"error": "Could not retrieve account"}), 500
-    
-    # Calculate position size if not provided
-    if "position_size" not in signal or signal["position_size"] == 0:
-        # Get account value (simplified - should fetch actual account value)
-        account_value = 10000  # Default
-        signal["position_size"] = calculate_position_size(
-            account_value,
-            signal["entry"],
-            signal["stop"],
-            MAX_TRADE_AMOUNT
-        )
-    
-    # Build order
-    order_data = {
-        "symbol": signal["symbol"],
-        "action": signal["action"],
-        "quantity": signal["position_size"],
-        "orderType": "LIMIT",  # Use LIMIT for better execution
-        "price": signal["entry"],
-        "stopPrice": signal["stop"],
-        "accountId": signal["accountId"]
-    }
-    
     try:
-        order_payload = build_order_payload(order_data)
-        account_id = signal["accountId"]
-        url = f"{SCHWAB_ACCOUNTS_URL}/{account_id}/orders"
-        response = schwab_api_request("POST", url, tokens['access_token'], data=order_payload)
-        order_response = response.json()
-        
-        logger.info(f"Signal executed: {signal['symbol']} {signal['action']} @ {signal['entry']}")
-        
-        # Log trade
-        log_trade(order_data, order_response, signal)
-        
+        result = execute_signal_helper(signal, tokens['access_token'])
         return jsonify({
             "message": "Signal executed successfully",
-            "order": order_response,
-            "signal": signal
+            "order": result["order"],
+            "signal": result["signal"]
         }), 200
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         logger.error(f"Failed to execute signal: {e}")
         return jsonify({"error": str(e)}), 500

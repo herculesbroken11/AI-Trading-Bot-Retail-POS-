@@ -11,9 +11,9 @@ from utils.logger import setup_logger
 from core.ov_engine import OVStrategyEngine
 from core.position_manager import PositionManager
 from ai.analyze import TradingAIAnalyzer
-from api.quotes import get_historical_data
-from api.orders import execute_signal, get_positions
-from utils.helpers import load_tokens
+from api.orders import execute_signal_helper
+from utils.helpers import load_tokens, schwab_api_request
+from api.quotes import SCHWAB_HISTORICAL_URL, SCHWAB_QUOTES_URL
 
 logger = setup_logger("scheduler")
 
@@ -79,9 +79,6 @@ class TradingScheduler:
         for symbol in self.watchlist:
             try:
                 # Get historical data using Schwab API directly
-                from utils.helpers import schwab_api_request
-                from api.quotes import SCHWAB_HISTORICAL_URL
-                
                 params = {
                     "symbol": symbol,
                     "periodType": "day",
@@ -130,7 +127,7 @@ class TradingScheduler:
                     
                     # Execute signal
                     try:
-                        result = execute_signal(ai_signal)
+                        result = execute_signal_helper(ai_signal, tokens['access_token'])
                         if result and result.get('status') == 'success':
                             # Add to position manager
                             position = {
@@ -186,9 +183,6 @@ class TradingScheduler:
             symbol = position.get('symbol')
             try:
                 # Get quote directly from Schwab API
-                from utils.helpers import schwab_api_request
-                from api.quotes import SCHWAB_QUOTES_URL
-                
                 url = f"{SCHWAB_QUOTES_URL}?symbols={symbol}"
                 response = schwab_api_request("GET", url, tokens['access_token'])
                 quote = response.json()

@@ -136,13 +136,75 @@ def get_historical(symbol: str):
         
         # Convert to DataFrame if candles are present
         if 'candles' in data:
-            df = pd.DataFrame(data['candles'])
-            df.columns = ['datetime', 'open', 'high', 'low', 'close', 'volume']
-            df['datetime'] = pd.to_datetime(df['datetime'], unit='ms')
+            if not data['candles'] or len(data['candles']) == 0:
+                return jsonify({
+                    "error": "No candle data available",
+                    "symbol": symbol,
+                    "message": "Historical data request returned empty candles array"
+                }), 404
+            
+            # Process candles - handle both dict and array formats
+            candles = data['candles']
+            
+            if candles and isinstance(candles[0], dict):
+                # Dictionary format - use directly
+                df = pd.DataFrame(candles)
+                if 'datetime' in df.columns:
+                    df['datetime'] = pd.to_datetime(df['datetime'], unit='ms')
+                elif 'time' in df.columns:
+                    df['datetime'] = pd.to_datetime(df['time'], unit='ms')
+                    df = df.rename(columns={'time': 'datetime'})
+            else:
+                # Array format - auto-detect column order
+                df = pd.DataFrame(candles)
+                if len(df.columns) == 6:
+                    raw_values = [float(df.iloc[0, i]) for i in range(6)]
+                    datetime_idx = raw_values.index(max(raw_values))
+                    non_datetime = [(i, v) for i, v in enumerate(raw_values) if i != datetime_idx]
+                    volume_candidates = [(i, v) for i, v in non_datetime if 1e6 <= v < 1e10]
+                    volume_idx = volume_candidates[0][0] if volume_candidates else non_datetime[-1][0]
+                    price_indices = [i for i in range(6) if i not in [datetime_idx, volume_idx]]
+                    price_vals = [(i, raw_values[i]) for i in price_indices]
+                    price_vals.sort(key=lambda x: x[1])
+                    low_idx = price_vals[0][0]
+                    high_idx = price_vals[-1][0]
+                    open_idx = price_vals[1][0] if len(price_vals) > 1 else price_indices[0]
+                    close_idx = price_vals[2][0] if len(price_vals) > 2 else price_indices[1]
+                    col_map = [''] * 6
+                    col_map[datetime_idx] = 'datetime'
+                    col_map[open_idx] = 'open'
+                    col_map[high_idx] = 'high'
+                    col_map[low_idx] = 'low'
+                    col_map[close_idx] = 'close'
+                    col_map[volume_idx] = 'volume'
+                    df.columns = col_map
+                    df['datetime'] = pd.to_datetime(df['datetime'], unit='ms')
+                else:
+                    logger.error(f"Unexpected candle format: {len(df.columns)} columns")
+                    return jsonify({
+                        "error": "Unexpected data format from API",
+                        "columns_count": len(df.columns)
+                    }), 500
+            
+            # Ensure numeric types
+            for col in ['open', 'high', 'low', 'close', 'volume']:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
             
             # Calculate indicators
             engine = OVStrategyEngine()
             df = engine.calculate_indicators(df)
+            
+            # Check if we have enough data for indicators
+            if len(df) < 200:  # Need at least 200 periods for SMA200
+                logger.warning(f"Insufficient data for {symbol}: only {len(df)} candles (need 200+)")
+                return jsonify({
+                    "symbol": symbol,
+                    "candles_count": len(df),
+                    "warning": f"Insufficient data for full indicator calculation (need 200+ candles, got {len(df)})",
+                    "summary": engine.get_market_summary(df),  # Will handle missing indicators gracefully
+                    "setup": None
+                }), 200
             
             # Save to CSV
             csv_path = Path(f"data/{symbol}_{datetime.now().strftime('%Y%m%d')}.csv")
@@ -152,8 +214,13 @@ def get_historical(symbol: str):
             logger.info(f"Retrieved and processed historical data for {symbol}")
             
             # Return summary
-            summary = engine.get_market_summary(df)
-            setup = engine.identify_setup(df)
+            try:
+                summary = engine.get_market_summary(df)
+                setup = engine.identify_setup(df)
+            except Exception as e:
+                logger.error(f"Error generating summary/setup for {symbol}: {e}")
+                summary = engine.get_market_summary(df)  # Try summary only
+                setup = None
             
             return jsonify({
                 "symbol": symbol,
@@ -166,6 +233,8 @@ def get_historical(symbol: str):
         return jsonify(data), 200
     except Exception as e:
         logger.error(f"Failed to get historical data for {symbol}: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
 @quotes_bp.route('/analyze/<symbol>', methods=['GET'])
@@ -206,25 +275,164 @@ def analyze_symbol(symbol: str):
             else:
                 raise
         
-        if 'candles' not in data:
+        if 'candles' not in data or not data['candles'] or len(data['candles']) == 0:
             return jsonify({"error": "No historical data available"}), 404
         
         # Process data
-        df = pd.DataFrame(data['candles'])
-        df.columns = ['datetime', 'open', 'high', 'low', 'close', 'volume']
-        df['datetime'] = pd.to_datetime(df['datetime'], unit='ms')
+        # Schwab API returns candles as list of arrays: [datetime, open, high, low, close, volume]
+        candles = data['candles']
+        
+        if not candles or len(candles) == 0:
+            return jsonify({"error": "No candle data in response"}), 404
+        
+        # Log first candle to understand structure
+        logger.info(f"First candle sample (raw): {candles[0] if candles else 'None'}")
+        logger.info(f"Candle type: {type(candles[0])}, length: {len(candles[0]) if isinstance(candles[0], (list, tuple)) else 'N/A'}")
+        
+        # Check if candles are dictionaries or arrays
+        if isinstance(candles[0], dict):
+            # Dictionary format - use directly
+            df = pd.DataFrame(candles)
+            # Ensure column names are correct
+            if 'datetime' in df.columns:
+                df['datetime'] = pd.to_datetime(df['datetime'], unit='ms')
+            elif 'time' in df.columns:
+                df['datetime'] = pd.to_datetime(df['time'], unit='ms')
+                df = df.rename(columns={'time': 'datetime'})
+        else:
+            # Array format - Schwab returns: [datetime, open, high, low, close, volume]
+            # But we need to detect the actual order
+            df = pd.DataFrame(candles)
+            if len(df.columns) == 6:
+                # Log raw values to help debug
+                logger.info(f"Raw candle values: {[df.iloc[0, i] for i in range(6)]}")
+                
+                # Try to auto-detect column order by analyzing values
+                # datetime: very large (timestamp in ms, 13 digits, > 1e12)
+                # prices: moderate (usually $1-$1000, sometimes up to $5000)
+                # volume: large but reasonable (usually 1e6 to 1e9)
+                
+                raw_values = [float(df.iloc[0, i]) for i in range(6)]
+                
+                # Find datetime (largest value, looks like timestamp)
+                datetime_idx = raw_values.index(max(raw_values))
+                
+                # Find volume (large but not timestamp, typically 1e6-1e9 range)
+                non_datetime = [(i, v) for i, v in enumerate(raw_values) if i != datetime_idx]
+                volume_candidates = [(i, v) for i, v in non_datetime if 1e6 <= v < 1e10]
+                volume_idx = volume_candidates[0][0] if volume_candidates else non_datetime[-1][0]
+                
+                # Remaining 4 are prices
+                price_indices = [i for i in range(6) if i not in [datetime_idx, volume_idx]]
+                price_vals = [(i, raw_values[i]) for i in price_indices]
+                price_vals.sort(key=lambda x: x[1])
+                
+                # Assign: lowest = low, highest = high, middle two = open/close
+                low_idx = price_vals[0][0]
+                high_idx = price_vals[-1][0]
+                open_idx = price_vals[1][0] if len(price_vals) > 1 else price_indices[0]
+                close_idx = price_vals[2][0] if len(price_vals) > 2 else price_indices[1]
+                
+                # Create column mapping
+                col_map = [''] * 6
+                col_map[datetime_idx] = 'datetime'
+                col_map[open_idx] = 'open'
+                col_map[high_idx] = 'high'
+                col_map[low_idx] = 'low'
+                col_map[close_idx] = 'close'
+                col_map[volume_idx] = 'volume'
+                
+                logger.info(f"Auto-detected column order: {col_map}")
+                df.columns = col_map
+                df['datetime'] = pd.to_datetime(df['datetime'], unit='ms')
+            else:
+                logger.error(f"Unexpected candle format: {len(df.columns)} columns. First row: {candles[0]}")
+                return jsonify({
+                    "error": "Unexpected data format from API",
+                    "columns_count": len(df.columns),
+                    "sample": candles[0] if candles else None
+                }), 500
+        
+        # Ensure we have the required columns with correct types
+        required_cols = ['open', 'high', 'low', 'close', 'volume']
+        for col in required_cols:
+            if col not in df.columns:
+                logger.error(f"Missing required column: {col}. Available columns: {df.columns.tolist()}")
+                return jsonify({"error": f"Missing required column: {col}"}), 500
+            # Convert to numeric
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        # Validate and fix column order if needed
+        # Check if prices look reasonable (most stocks are $1-$1000 range)
+        if len(df) > 0:
+            sample_close = float(df['close'].iloc[0])
+            sample_volume = float(df['volume'].iloc[0])
+            
+            # If close price is suspiciously high (>$10,000) and volume looks like a timestamp
+            if sample_close > 10000 and sample_volume > 1000000000:
+                logger.warning(f"Detected misaligned columns: close={sample_close}, volume={sample_volume}")
+                logger.warning("Original candle structure might be different. Attempting to fix...")
+                
+                # Rebuild DataFrame - Schwab might return: [datetime, open, high, low, close, volume]
+                # But if misaligned, try different orders
+                df_new = pd.DataFrame(candles)
+                
+                # Try standard order first
+                if len(df_new.columns) == 6:
+                    # Common API formats to try - Schwab might use different orders
+                    orders_to_try = [
+                        ['datetime', 'open', 'high', 'low', 'close', 'volume'],  # Standard
+                        ['datetime', 'close', 'high', 'low', 'open', 'volume'],  # Close first  
+                        ['volume', 'close', 'low', 'high', 'open', 'datetime'],  # Reversed
+                        ['datetime', 'volume', 'open', 'high', 'low', 'close'],  # Volume second
+                        ['open', 'high', 'low', 'close', 'volume', 'datetime'],  # Datetime last
+                        ['volume', 'open', 'high', 'low', 'close', 'datetime'],  # Volume first
+                    ]
+                    
+                    for col_order in orders_to_try:
+                        df_test = df_new.copy()
+                        df_test.columns = col_order
+                        df_test['datetime'] = pd.to_datetime(df_test['datetime'], unit='ms')
+                        for col in ['open', 'high', 'low', 'close', 'volume']:
+                            df_test[col] = pd.to_numeric(df_test[col], errors='coerce')
+                        
+                        test_close = float(df_test['close'].iloc[0])
+                        test_volume = float(df_test['volume'].iloc[0])
+                        
+                        # Check if this order makes sense
+                        if 1 < test_close < 10000 and 1000 < test_volume < 10000000000:
+                            logger.info(f"Fixed column order. Using: {col_order}")
+                            df = df_test
+                            break
+                    else:
+                        logger.error("Could not determine correct column order")
+                        return jsonify({
+                            "error": "Unable to parse candle data - column order unclear",
+                            "sample": candles[0] if candles else None
+                        }), 500
+        
+        # Log first row for debugging
+        logger.info(f"Processed {len(df)} candles. Sample: close={df['close'].iloc[0]:.2f}, volume={df['volume'].iloc[0]}")
         
         # Calculate indicators and identify setup
         engine = OVStrategyEngine()
         df = engine.calculate_indicators(df)
-        summary = engine.get_market_summary(df)
-        setup = engine.identify_setup(df)
+        
+        # Get summary (handles missing indicators gracefully)
+        try:
+            summary = engine.get_market_summary(df)
+            setup = engine.identify_setup(df) if len(df) >= 200 else None
+        except Exception as e:
+            logger.error(f"Error generating summary/setup for {symbol}: {e}")
+            summary = engine.get_market_summary(df)  # Will handle missing indicators
+            setup = None
         
         return jsonify({
             "symbol": symbol,
             "summary": summary,
             "setup": setup,
-            "data_points": len(df)
+            "data_points": len(df),
+            "warning": "Insufficient data for full analysis" if len(df) < 200 else None
         }), 200
     except Exception as e:
         logger.error(f"Failed to analyze {symbol}: {e}")

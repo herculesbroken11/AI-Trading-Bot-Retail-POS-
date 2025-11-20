@@ -457,6 +457,9 @@ def get_positions():
     """
     Get current positions.
     Schwab API: GET /accounts/{accountNumber}/positions
+    
+    Query params:
+        accountId: (optional) Account number. If not provided, uses first account.
     """
     import requests
     
@@ -465,6 +468,24 @@ def get_positions():
         return jsonify({"error": "Not authenticated"}), 401
     
     account_id = request.args.get('accountId')
+    
+    # If no accountId provided, get the first account
+    if not account_id:
+        try:
+            accounts_response = schwab_api_request("GET", SCHWAB_ACCOUNTS_URL, tokens['access_token'])
+            accounts = accounts_response.json()
+            if accounts and len(accounts) > 0:
+                account_id = accounts[0].get("securitiesAccount", {}).get("accountNumber", "")
+                if not account_id:
+                    # Try alternative structure
+                    account_id = accounts[0].get("accountNumber", "")
+                logger.info(f"No accountId provided, using first account: {account_id}")
+            else:
+                return jsonify({"error": "No accounts found"}), 404
+        except Exception as e:
+            logger.error(f"Failed to get accounts: {e}")
+            return jsonify({"error": "Could not retrieve account. Please provide accountId parameter."}), 500
+    
     if not account_id:
         return jsonify({"error": "accountId required"}), 400
     

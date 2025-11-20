@@ -521,17 +521,36 @@ class OVStrategyEngine:
         
         latest = df.iloc[-1]
         
+        # Helper function to safely get indicator value
+        def get_indicator(col_name, default=None):
+            if col_name in df.columns:
+                value = latest[col_name]
+                if pd.isna(value):
+                    return default
+                try:
+                    if col_name in ['sma_8', 'sma_20', 'sma_200', 'atr_14', 'rsi_14', 'volume_ma']:
+                        return float(value)
+                    elif col_name == 'volume':
+                        return int(value)
+                    elif col_name in ['above_sma200', 'sma_aligned_bullish', 'sma_aligned_bearish']:
+                        return bool(value)
+                    else:
+                        return value
+                except (ValueError, TypeError):
+                    return default
+            return default
+        
         summary = {
             "current_price": float(latest['close']),
-            "sma_8": float(latest['sma_8']) if not pd.isna(latest['sma_8']) else None,
-            "sma_20": float(latest['sma_20']) if not pd.isna(latest['sma_20']) else None,
-            "sma_200": float(latest['sma_200']) if not pd.isna(latest['sma_200']) else None,
-            "atr_14": float(latest['atr_14']) if not pd.isna(latest['atr_14']) else None,
-            "rsi_14": float(latest['rsi_14']) if not pd.isna(latest['rsi_14']) else None,
-            "volume": int(latest['volume']),
-            "volume_ma": float(latest['volume_ma']) if not pd.isna(latest['volume_ma']) else None,
-            "trend": "BULLISH" if latest['sma_aligned_bullish'] else "BEARISH" if latest['sma_aligned_bearish'] else "NEUTRAL",
-            "above_sma200": bool(latest['above_sma200']),
+            "sma_8": get_indicator('sma_8'),
+            "sma_20": get_indicator('sma_20'),
+            "sma_200": get_indicator('sma_200'),
+            "atr_14": get_indicator('atr_14'),
+            "rsi_14": get_indicator('rsi_14'),
+            "volume": get_indicator('volume', 0),
+            "volume_ma": get_indicator('volume_ma'),
+            "trend": "BULLISH" if get_indicator('sma_aligned_bullish', False) else "BEARISH" if get_indicator('sma_aligned_bearish', False) else "NEUTRAL",
+            "above_sma200": get_indicator('above_sma200', False),
             "price_change_pct": float(((latest['close'] - df.iloc[-2]['close']) / df.iloc[-2]['close']) * 100) if len(df) > 1 else 0.0
         }
         

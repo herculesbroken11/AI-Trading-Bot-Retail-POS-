@@ -651,11 +651,41 @@ def preview_order(account_id: str):
             
             # If it's a 400 error, try to get response body if available
             if "400" in error_str or "Bad Request" in error_str:
+                # Extract validation error details if available
+                suggestion = "Check order payload structure. Ensure all required fields are present and valid."
+                if "validation error" in error_str.lower():
+                    suggestion += " Common issues: insufficient buying power, price too far from market, or market closed."
+                
+                # Try to get account balance to check buying power
+                buying_power_info = None
+                try:
+                    account_response = schwab_api_request("GET", f"{SCHWAB_ACCOUNTS_URL}/{account_hash}", tokens['access_token'])
+                    account_data = account_response.json()
+                    if isinstance(account_data, list) and len(account_data) > 0:
+                        account = account_data[0].get('securitiesAccount', {})
+                        balances = account.get('currentBalances', {})
+                        buying_power_info = {
+                            "available_funds": balances.get('availableFunds'),
+                            "buying_power": balances.get('buyingPower'),
+                            "cash_balance": balances.get('cashBalance')
+                        }
+                except:
+                    pass  # Don't fail if we can't get account info
+                
                 return jsonify({
-                    "error": "Bad request to Schwab API",
+                    "error": "Bad request to Schwab API - validation error",
                     "details": error_str,
                     "payload_sent": order_payload,
-                    "suggestion": "Check order payload structure. Ensure all required fields are present and valid."
+                    "suggestion": suggestion,
+                    "account_info": buying_power_info,
+                    "common_fixes": [
+                        "Check account has sufficient buying power (order cost: quantity × price)",
+                        "Verify price is reasonable (not too far from current market price)",
+                        "Ensure market is open (9:30 AM - 4:00 PM ET)",
+                        "Verify symbol is valid and tradeable",
+                        "Check quantity is a positive integer",
+                        "For LIMIT orders, price should be within reasonable range of current market price"
+                    ]
                 }), 400
             raise
         

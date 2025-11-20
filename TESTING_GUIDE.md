@@ -163,7 +163,28 @@ curl http://localhost:5035/quotes/AAPL
 curl "http://localhost:5035/quotes/historical/AAPL?periodType=day&period=1&frequencyType=minute&frequency=5"
 ```
 
-**Expected:** JSON with historical candles
+**Expected:** JSON with historical candles, summary, and setup:
+```json
+{
+  "symbol": "AAPL",
+  "candles_count": 390,
+  "summary": {
+    "current_price": 273.67,
+    "sma_8": 272.50,
+    "sma_20": 270.30,
+    "sma_200": 265.00,
+    "atr_14": 2.5,
+    "rsi_14": 55.0,
+    "trend": "BULLISH"
+  },
+  "setup": {...}
+}
+```
+
+**Note:**
+- System automatically detects correct column order from Schwab API response
+- If insufficient data (< 200 candles), you'll get a warning but still receive available data
+- Column misalignment issues are automatically fixed
 
 #### 3.3 Get Market Analysis (Full OV Analysis)
 
@@ -176,6 +197,38 @@ curl http://localhost:5035/quotes/analyze/AAPL
 - Identified setup (if any)
 - 4 Fantastics status
 - 75% Candle Rule status
+
+**Example Response:**
+```json
+{
+  "symbol": "AAPL",
+  "data_points": 390,
+  "summary": {
+    "current_price": 273.67,
+    "sma_8": 272.50,
+    "sma_20": 270.30,
+    "sma_200": 265.00,
+    "atr_14": 2.5,
+    "rsi_14": 55.0,
+    "volume": 5345634,
+    "trend": "BULLISH",
+    "above_sma200": true
+  },
+  "setup": {
+    "type": "PULLBACK_LONG",
+    "direction": "LONG",
+    "entry_price": 273.50,
+    "stop_loss": 271.00,
+    "take_profit": 278.00,
+    "confidence": 0.75
+  }
+}
+```
+
+**Note:**
+- Prices should be in reasonable range (e.g., $1-$1000 for most stocks)
+- If you see prices like 805517, that indicates column misalignment (now auto-fixed)
+- Volume should be reasonable numbers, not timestamps
 
 **✅ Success Criteria:**
 - All endpoints return data (not 401/403 errors)
@@ -199,19 +252,48 @@ curl http://localhost:5035/orders/accounts
 #### 4.2 Get Positions
 
 ```bash
+# Positions endpoint auto-detects account if not provided
 curl http://localhost:5035/orders/positions
+
+# Or specify account explicitly
+curl "http://localhost:5035/orders/positions?accountId=YOUR_ACCOUNT_ID"
 ```
 
-**Expected:** JSON with current positions (may be empty if no positions)
+**Expected:** JSON with current positions:
+```json
+{
+  "positions": [],
+  "account_id": "18056335",
+  "count": 0
+}
+```
+
+**Note:** 
+- Uses Schwab API: `GET /accounts/{accountNumber}?fields=positions`
+- If no `accountId` is provided, the system automatically uses the first account
+- Empty array `[]` means no open positions (this is normal)
+- Positions are included in account details when `fields=positions` is specified
 
 #### 4.3 Get All Orders
 
 ```bash
-# Replace YOUR_ACCOUNT_ID with actual account ID from step 4.1
-curl "http://localhost:5035/orders/all-orders?accountId=YOUR_ACCOUNT_ID"
+# Get orders for specific account (date parameters optional)
+curl "http://localhost:5035/orders/all-orders?accountId=18056335"
+
+# Get orders for specific account with date filter
+curl "http://localhost:5035/orders/all-orders?accountId=18056335&fromEnteredTime=2024-10-20T00:00:00.000Z&toEnteredTime=2024-11-20T23:59:59.000Z"
+
+# Get all orders for ALL accounts (date parameters REQUIRED)
+curl "http://localhost:5035/orders/all-orders?fromEnteredTime=2024-10-20T00:00:00.000Z&toEnteredTime=2024-11-20T23:59:59.000Z&maxResults=100"
 ```
 
 **Expected:** JSON array with orders
+
+**Note:**
+- For account-specific orders: date parameters are optional
+- For all-accounts orders: `fromEnteredTime` and `toEnteredTime` are REQUIRED
+- Date format: ISO-8601 `yyyy-MM-dd'T'HH:mm:ss.SSSZ`
+- Maximum date range: 60 days for all-accounts, 1 year for account-specific
 
 **✅ Success Criteria:**
 - Can retrieve account information
@@ -380,12 +462,50 @@ curl -X POST http://localhost:5035/positions/update-prices \
 
 ⚠️ **WARNING:** This will place REAL orders. Test with small amounts or paper trading first!
 
-#### 9.1 Test Signal Execution
+#### 9.1 Preview Order (Recommended First Step)
 
 ```bash
 # Get your account ID first
-ACCOUNT_ID=$(curl -s http://localhost:5035/orders/accounts | jq -r '.[0].accountNumber')
+ACCOUNT_ID=$(curl -s http://localhost:5035/orders/accounts | jq -r '.[0].securitiesAccount.accountNumber')
 
+# Preview order before placing (SMALL AMOUNT!)
+curl -X POST http://localhost:5035/orders/$ACCOUNT_ID/preview \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"symbol\": \"AAPL\",
+    \"action\": \"BUY\",
+    \"quantity\": 1,
+    \"orderType\": \"LIMIT\",
+    \"price\": 150.00
+  }"
+```
+
+**Expected:** Preview response with validation results:
+```json
+{
+  "message": "Order preview generated",
+  "preview": {
+    "orderValidationResult": {
+      "rejects": [],
+      "warns": [],
+      "reviews": []
+    },
+    "orderStrategy": {
+      "projectedCommission": 0,
+      "projectedBuyingPower": 0
+    }
+  },
+  "summary": {
+    "valid": true,
+    "has_warnings": false,
+    "projected_commission": 0
+  }
+}
+```
+
+#### 9.2 Test Signal Execution
+
+```bash
 # Execute a test signal (SMALL AMOUNT!)
 curl -X POST http://localhost:5035/orders/signal \
   -H "Content-Type: application/json" \
@@ -401,12 +521,28 @@ curl -X POST http://localhost:5035/orders/signal \
   }"
 ```
 
-**Expected:** Order confirmation JSON
+**Expected:** Order confirmation with 201 status:
+```json
+{
+  "message": "Order placed successfully",
+  "status": "PLACED",
+  "location": "/accounts/18056335/orders/123456",
+  "correlation_id": "abc-123",
+  "order": null
+}
+```
 
-#### 9.2 Verify Order Was Placed
+**Note:**
+- Order placement returns 201 (Created) status code
+- Response body is empty (per Schwab API)
+- `Location` header contains link to created order
+- `Schwab-Client-CorrelId` header contains correlation ID
+
+#### 9.3 Verify Order Was Placed
 
 ```bash
-curl "http://localhost:5035/orders/all-orders?accountId=$ACCOUNT_ID"
+# Get orders for account (with date range)
+curl "http://localhost:5035/orders/all-orders?accountId=$ACCOUNT_ID&fromEnteredTime=2024-11-20T00:00:00.000Z&toEnteredTime=2024-11-20T23:59:59.000Z"
 ```
 
 **Expected:** Your test order appears in the list
@@ -418,13 +554,64 @@ curl "http://localhost:5035/orders/all-orders?accountId=$ACCOUNT_ID"
 
 ---
 
-### Test 10: Reporting
+### Test 10: Transactions
 
-#### 10.1 Generate Daily Report
+#### 10.1 Get Transactions
 
 ```bash
 # Get account ID
-ACCOUNT_ID=$(curl -s http://localhost:5035/orders/accounts | jq -r '.[0].accountNumber')
+ACCOUNT_ID=$(curl -s http://localhost:5035/orders/accounts | jq -r '.[0].securitiesAccount.accountNumber')
+
+# Get transactions (startDate, endDate, and types are REQUIRED)
+curl "http://localhost:5035/orders/$ACCOUNT_ID/transactions?startDate=2024-10-20T00:00:00.000Z&endDate=2024-11-20T23:59:59.000Z&types=TRADE"
+
+# Get multiple transaction types
+curl "http://localhost:5035/orders/$ACCOUNT_ID/transactions?startDate=2024-10-20T00:00:00.000Z&endDate=2024-11-20T23:59:59.000Z&types=TRADE,DIVIDEND_OR_INTEREST"
+
+# Filter by symbol
+curl "http://localhost:5035/orders/$ACCOUNT_ID/transactions?startDate=2024-10-20T00:00:00.000Z&endDate=2024-11-20T23:59:59.000Z&types=TRADE&symbol=AAPL"
+```
+
+**Expected:** JSON with transactions:
+```json
+{
+  "transactions": [],
+  "account_id": "18056335",
+  "count": 0,
+  "note": "Maximum 3000 transactions returned, maximum date range is 1 year"
+}
+```
+
+**Note:**
+- `startDate` and `endDate` are REQUIRED (ISO-8601 format)
+- `types` parameter is REQUIRED (comma-separated)
+- Maximum 3000 transactions per response
+- Maximum date range is 1 year
+- Available types: TRADE, DIVIDEND_OR_INTEREST, ACH_RECEIPT, etc.
+
+#### 10.2 Get Specific Transaction
+
+```bash
+# Get specific transaction by ID
+curl "http://localhost:5035/orders/$ACCOUNT_ID/transactions/123456"
+```
+
+**Expected:** JSON with transaction details
+
+**✅ Success Criteria:**
+- Can retrieve transactions with required parameters
+- Date format validation works
+- Transaction types filter correctly
+
+---
+
+### Test 11: Reporting
+
+#### 11.1 Generate Daily Report
+
+```bash
+# Get account ID
+ACCOUNT_ID=$(curl -s http://localhost:5035/orders/accounts | jq -r '.[0].securitiesAccount.accountNumber')
 
 # Generate report
 curl "http://localhost:5035/reports/daily?accountId=$ACCOUNT_ID"
@@ -432,7 +619,7 @@ curl "http://localhost:5035/reports/daily?accountId=$ACCOUNT_ID"
 
 **Expected:** JSON with daily P&L, trades, compliance metrics
 
-#### 10.2 Check Trade History
+#### 11.2 Check Trade History
 
 ```bash
 curl "http://localhost:5035/reports/trades?accountId=$ACCOUNT_ID"
@@ -447,9 +634,9 @@ curl "http://localhost:5035/reports/trades?accountId=$ACCOUNT_ID"
 
 ---
 
-### Test 11: Dashboard
+### Test 12: Dashboard
 
-#### 11.1 Access Dashboard
+#### 12.1 Access Dashboard
 
 Open in browser:
 ```
@@ -469,9 +656,9 @@ http://your-server:5035/dashboard
 
 ---
 
-### Test 12: Auto-Close at 4 PM ET
+### Test 13: Auto-Close at 4 PM ET
 
-#### 12.1 Test Auto-Close Logic
+#### 13.1 Test Auto-Close Logic
 
 ```bash
 # Check if auto-close time detection works
@@ -517,11 +704,18 @@ curl -s $BASE_URL/quotes/analyze/AAPL | jq . | head -30
 echo -e "\n5. Accounts..."
 curl -s $BASE_URL/orders/accounts | jq .
 
-echo -e "\n6. Automation Status..."
+echo -e "\n6. Positions (auto-detects account)..."
+curl -s $BASE_URL/orders/positions | jq .
+
+echo -e "\n7. Automation Status..."
 curl -s $BASE_URL/automation/status | jq .
 
-echo -e "\n7. Active Positions..."
+echo -e "\n8. Active Positions..."
 curl -s $BASE_URL/positions/active | jq .
+
+echo -e "\n9. Preview Order (example)..."
+ACCOUNT_ID=$(curl -s $BASE_URL/orders/accounts | jq -r '.[0].securitiesAccount.accountNumber')
+echo "Account ID: $ACCOUNT_ID"
 
 echo -e "\n=== Tests Complete ==="
 ```
@@ -549,7 +743,13 @@ Use this checklist to track your testing:
 - [ ] Setup identification works
 - [ ] AI analysis completes
 - [ ] Account endpoints work
-- [ ] Position endpoints work
+- [ ] Position endpoints work (auto-detects account, uses fields=positions)
+- [ ] Historical data column detection works
+- [ ] Prices are in correct range (not misaligned)
+- [ ] Orders endpoint works (with correct date parameters)
+- [ ] Transactions endpoint works (with required parameters)
+- [ ] Order placement returns 201 with Location header
+- [ ] Preview order shows validation results
 - [ ] Automation scheduler starts
 - [ ] Automation status works
 - [ ] Position management works
@@ -602,7 +802,27 @@ sudo kill -9 <PID>
 ```bash
 # Refresh token
 curl -X POST http://localhost:5035/auth/refresh
+
+# Or re-authenticate
+curl http://localhost:5035/auth/login
+# Follow the auth_url in response
 ```
+
+### Issue: Positions endpoint returns 404
+
+**Solution:**
+- This has been fixed! The endpoint now uses `GET /accounts/{accountNumber}?fields=positions`
+- If you still get 404, check that accountId is correct
+- The endpoint will return an empty array `[]` if no positions exist
+- Verify account: `curl http://localhost:5035/orders/accounts`
+
+### Issue: Historical data shows incorrect prices (e.g., 805517 instead of ~275)
+
+**Solution:**
+- This has been fixed! The system now auto-detects column order
+- If you still see this, check server logs for "Auto-detected column order"
+- The system automatically identifies datetime, volume, and price columns
+- Try the endpoint again - it should work correctly now
 
 ### Issue: AI analysis fails
 
@@ -614,7 +834,66 @@ cat .env | grep OPENAI
 # Test API key
 curl https://api.openai.com/v1/models \
   -H "Authorization: Bearer $OPENAI_API_KEY"
+
+# If you see "Client.__init__() got an unexpected keyword argument 'proxies'"
+# Update OpenAI library:
+pip install --upgrade "openai>=1.12.0"
 ```
+
+### Issue: Scheduler fails to start with import errors
+
+**Solution:**
+```bash
+# Check for import errors in logs
+tail -f data/logs/*.log | grep -i "import\|error"
+
+# Common fixes:
+# 1. Ensure all dependencies installed
+pip install -r requirements.txt
+
+# 2. Check virtual environment is activated
+which python3
+source venv/bin/activate
+
+# 3. Verify all modules exist
+ls -la core/ api/ ai/ utils/
+```
+
+### Issue: Transactions endpoint returns 400 error
+
+**Solution:**
+```bash
+# Transactions endpoint requires startDate, endDate, and types
+# All three parameters are REQUIRED
+
+# Correct usage:
+curl "http://localhost:5035/orders/18056335/transactions?startDate=2024-10-20T00:00:00.000Z&endDate=2024-11-20T23:59:59.000Z&types=TRADE"
+
+# Date format must be ISO-8601: yyyy-MM-dd'T'HH:mm:ss.SSSZ
+# Available types: TRADE, DIVIDEND_OR_INTEREST, ACH_RECEIPT, etc.
+```
+
+### Issue: Orders endpoint returns 400 error
+
+**Solution:**
+```bash
+# For GET /orders (all accounts), date parameters are REQUIRED
+# For account-specific orders, dates are optional
+
+# All accounts (requires dates):
+curl "http://localhost:5035/orders/all-orders?fromEnteredTime=2024-10-20T00:00:00.000Z&toEnteredTime=2024-11-20T23:59:59.000Z"
+
+# Account-specific (dates optional):
+curl "http://localhost:5035/orders/all-orders?accountId=18056335"
+```
+
+### Issue: Order placement returns empty response
+
+**Solution:**
+- This is normal! Schwab API returns 201 with empty body
+- Check the `Location` header in response - it contains the order link
+- The `correlation_id` is in the `Schwab-Client-CorrelId` header
+- Use the Location URL to get order details
 
 ---
 
@@ -650,10 +929,72 @@ After all tests pass, you're ready to move to production with gunicorn!
 
 **Next Steps:**
 1. All tests pass ✅
-2. Review `GUNICORN_DEPLOYMENT.md` (will create)
-3. Configure gunicorn
-4. Set up systemd service
-5. Deploy to production
+2. Verify all endpoints work correctly
+3. Check logs for any errors
+4. Test with actual account (small amounts)
+5. Configure gunicorn
+6. Set up systemd service
+7. Deploy to production
+
+---
+
+## 📌 Recent Fixes & Updates
+
+### Fixed Issues:
+1. **Positions Endpoint (404 Error)**
+   - Fixed: Now uses `GET /accounts/{accountNumber}?fields=positions` (official API method)
+   - Auto-detects account if not provided
+   - Returns empty array if no positions (not an error)
+
+2. **Historical Data Column Misalignment**
+   - Fixed: Auto-detects column order from Schwab API response
+   - Handles both dictionary and array candle formats
+   - Validates prices are in reasonable range
+
+3. **OpenAI Client Initialization**
+   - Fixed: Lazy initialization to prevent startup errors
+   - Graceful fallback if AI analyzer fails
+   - Updated to OpenAI library >= 1.12.0
+
+4. **Scheduler Import Errors**
+   - Fixed: Removed invalid imports
+   - Uses helper functions instead of Flask route handlers
+   - Direct API calls for better performance
+
+5. **Order Payload Structure**
+   - Fixed: Now matches official Schwab API Order Object structure
+   - Includes positionEffect, quantityType, taxLotMethod fields
+   - Proper handling of LIMIT and STOP orders
+
+6. **Order Placement Response**
+   - Fixed: Handles 201 status code with empty response body
+   - Extracts Location header (link to created order)
+   - Extracts Schwab-Client-CorrelId header
+
+7. **Transactions Endpoint**
+   - Fixed: Now requires startDate, endDate, and types parameters
+   - Validates ISO-8601 date format
+   - Provides clear error messages with examples
+
+8. **Orders Endpoint**
+   - Fixed: Requires date parameters for GET /orders (all accounts)
+   - Optional dates for account-specific orders
+   - Validates date range (60 days for all-accounts, 1 year for account-specific)
+
+### API Endpoint Updates:
+- `/orders/positions` - Uses `GET /accounts/{accountNumber}?fields=positions` (official API method)
+- `/orders/all-orders` - Requires date parameters for all-accounts endpoint
+- `/orders/<account_id>/transactions` - Requires startDate, endDate, and types parameters
+- `/orders/<account_id>/preview` - Enhanced with validation summary extraction
+- `/orders/place` and `/orders/signal` - Handle 201 response with Location header
+- `/quotes/historical/<symbol>` - Auto-detects column order, handles insufficient data
+- `/quotes/analyze/<symbol>` - Improved error handling, better data validation
+
+### Order Payload Updates:
+- Matches official Schwab API Order Object structure
+- Includes positionEffect, quantityType, taxLotMethod fields
+- Supports optional fields (session, duration, specialInstruction, etc.)
+- Proper handling of LIMIT and STOP orders with price link fields
 
 ---
 
@@ -671,7 +1012,22 @@ curl http://localhost:5035/quotes/analyze/AAPL
 
 # Quick automation check
 curl http://localhost:5035/automation/status
+
+# Quick positions check (auto-detects account)
+curl http://localhost:5035/orders/positions
+
+# Quick orders check (account-specific, no dates needed)
+ACCOUNT_ID=$(curl -s http://localhost:5035/orders/accounts | jq -r '.[0].securitiesAccount.accountNumber')
+curl "http://localhost:5035/orders/all-orders?accountId=$ACCOUNT_ID"
+
+# Quick transactions check (requires dates and types)
+curl "http://localhost:5035/orders/$ACCOUNT_ID/transactions?startDate=2024-11-01T00:00:00.000Z&endDate=2024-11-20T23:59:59.000Z&types=TRADE"
 ```
 
 **All should return valid JSON responses!**
+
+**Note:** 
+- Positions endpoint auto-detects account
+- Orders endpoint works without dates for account-specific queries
+- Transactions endpoint requires startDate, endDate, and types
 

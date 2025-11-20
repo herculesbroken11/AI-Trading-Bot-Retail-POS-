@@ -126,17 +126,34 @@ def place_order():
         account_id = data["accountId"]
         url = f"{SCHWAB_ACCOUNTS_URL}/{account_id}/orders"
         response = schwab_api_request("POST", url, tokens['access_token'], data=order_payload)
-        order_response = response.json()
         
-        logger.info(f"Order placed: {data['symbol']} {data['action']} {data['quantity']}")
+        # According to Schwab API docs:
+        # - Successful order placement returns 201 (not 200)
+        # - Response body is empty
+        # - Location header contains link to newly created order
+        # - Schwab-Client-CorrelId header contains correlation ID
+        
+        location = response.headers.get('Location', '')
+        correl_id = response.headers.get('Schwab-Client-CorrelId', '')
+        
+        logger.info(f"Order placed: {data['symbol']} {data['action']} {data['quantity']} (Location: {location})")
+        
+        # Try to parse response if it has content, otherwise use empty dict
+        try:
+            order_response = response.json() if response.text else {}
+        except:
+            order_response = {}
         
         # Log trade to CSV
-        log_trade(data, order_response)
+        log_trade(data, order_response if order_response else {"status": "PLACED", "location": location})
         
         return jsonify({
             "message": "Order placed successfully",
-            "order": order_response
-        }), 200
+            "status": "PLACED",
+            "location": location,
+            "correlation_id": correl_id,
+            "order": order_response if order_response else None
+        }), 201  # Return 201 as per API docs
     except Exception as e:
         logger.error(f"Failed to place order: {e}")
         return jsonify({"error": str(e)}), 500
@@ -196,16 +213,27 @@ def execute_signal_helper(signal: dict, access_token: str) -> dict:
     account_id = signal["accountId"]
     url = f"{SCHWAB_ACCOUNTS_URL}/{account_id}/orders"
     response = schwab_api_request("POST", url, access_token, data=order_payload)
-    order_response = response.json()
     
-    logger.info(f"Signal executed: {signal['symbol']} {signal['action']} @ {signal['entry']}")
+    # Handle 201 response with empty body and Location header
+    location = response.headers.get('Location', '')
+    correl_id = response.headers.get('Schwab-Client-CorrelId', '')
+    
+    # Try to parse response if it has content, otherwise use empty dict
+    try:
+        order_response = response.json() if response.text else {}
+    except:
+        order_response = {}
+    
+    logger.info(f"Signal executed: {signal['symbol']} {signal['action']} @ {signal['entry']} (Location: {location})")
     
     # Log trade
-    log_trade(order_data, order_response, signal)
+    log_trade(order_data, order_response if order_response else {"status": "PLACED", "location": location}, signal)
     
     return {
         "status": "success",
-        "order": order_response,
+        "order": order_response if order_response else {"status": "PLACED", "location": location},
+        "location": location,
+        "correlation_id": correl_id,
         "account_id": account_id,
         "signal": signal
     }
@@ -300,9 +328,19 @@ def get_all_orders():
     Query params:
         accountId: Optional - if provided, get orders for specific account
         maxResults: Max number of results (default: 3000)
-        fromEnteredTime: Start date/time
-        toEnteredTime: End date/time
-        status: Order status filter
+        fromEnteredTime: Start date/time (ISO-8601 format: yyyy-MM-dd'T'HH:mm:ss.SSSZ)
+                        REQUIRED for GET /orders (all accounts)
+                        Must be within 60 days from today
+                        Must be provided together with toEnteredTime
+        toEnteredTime: End date/time (ISO-8601 format: yyyy-MM-dd'T'HH:mm:ss.SSSZ)
+                      REQUIRED for GET /orders (all accounts)
+                      Must be provided together with fromEnteredTime
+        status: Order status filter (AWAITING_PARENT_ORDER, ACCEPTED, FILLED, etc.)
+    
+    Note: 
+    - For GET /orders (all accounts): fromEnteredTime and toEnteredTime are REQUIRED
+    - For GET /accounts/{accountNumber}/orders: date parameters are optional
+    - Maximum date range is 60 days for GET /orders, 1 year for account-specific
     """
     tokens = load_tokens()
     if not tokens or 'access_token' not in tokens:
@@ -318,19 +356,47 @@ def get_all_orders():
         # If accountId provided, get orders for specific account
         if account_id:
             url = f"{SCHWAB_ACCOUNTS_URL}/{account_id}/orders"
+            # For account-specific orders, date parameters are optional
+            params = {}
+            if max_results:
+                params['maxResults'] = max_results
+            
+            # Both must be provided together if one is provided
+            if from_entered_time or to_entered_time:
+                if not from_entered_time or not to_entered_time:
+                    return jsonify({
+                        "error": "Both fromEnteredTime and toEnteredTime must be provided together",
+                        "format": "ISO-8601: yyyy-MM-dd'T'HH:mm:ss.SSSZ",
+                        "example": "2024-03-29T00:00:00.000Z"
+                    }), 400
+                params['fromEnteredTime'] = from_entered_time
+                params['toEnteredTime'] = to_entered_time
+            
+            if status:
+                params['status'] = status
         else:
-            # Get all orders for all accounts
+            # Get all orders for all accounts - REQUIRES date parameters
             url = f"{SCHWAB_BASE_URL}/trader/v1/orders"
-        
-        params = {}
-        if max_results:
-            params['maxResults'] = max_results
-        if from_entered_time:
-            params['fromEnteredTime'] = from_entered_time
-        if to_entered_time:
-            params['toEnteredTime'] = to_entered_time
-        if status:
-            params['status'] = status
+            
+            # According to API docs: fromEnteredTime and toEnteredTime are REQUIRED for GET /orders
+            if not from_entered_time or not to_entered_time:
+                return jsonify({
+                    "error": "fromEnteredTime and toEnteredTime are REQUIRED for GET /orders (all accounts)",
+                    "format": "ISO-8601: yyyy-MM-dd'T'HH:mm:ss.SSSZ",
+                    "example": "2024-03-29T00:00:00.000Z",
+                    "note": "Date must be within 60 days from today"
+                }), 400
+            
+            params = {
+                'fromEnteredTime': from_entered_time,
+                'toEnteredTime': to_entered_time
+            }
+            
+            if max_results:
+                params['maxResults'] = max_results
+            
+            if status:
+                params['status'] = status
         
         response = schwab_api_request("GET", url, tokens['access_token'], params=params)
         data = response.json()
@@ -425,7 +491,14 @@ def preview_order(account_id: str):
     Preview an order before placing it.
     Schwab API: POST /accounts/{accountNumber}/previewOrder
     
-    Request body: Same as place order
+    According to Schwab API documentation, the preview response includes:
+    - orderStrategy: Order details with projected values (available funds, buying power, commission)
+    - orderValidationResult: Validation results (alerts, accepts, rejects, reviews, warns)
+    - commissionAndFee: Detailed commission and fee breakdown
+    
+    Request body: Same as place order (Order Object)
+    
+    Returns: Preview response with validation results and projected values
     """
     tokens = load_tokens()
     if not tokens or 'access_token' not in tokens:
@@ -444,9 +517,31 @@ def preview_order(account_id: str):
         preview_response = response.json()
         
         logger.info(f"Previewed order for account {account_id}")
+        
+        # Extract key information from preview response
+        validation_result = preview_response.get('orderValidationResult', {})
+        order_strategy = preview_response.get('orderStrategy', {})
+        commission_fee = preview_response.get('commissionAndFee', {})
+        
+        # Check for validation issues
+        has_rejects = len(validation_result.get('rejects', [])) > 0
+        has_warns = len(validation_result.get('warns', [])) > 0
+        has_reviews = len(validation_result.get('reviews', [])) > 0
+        
         return jsonify({
             "message": "Order preview generated",
-            "preview": preview_response
+            "preview": preview_response,
+            "summary": {
+                "valid": not has_rejects,
+                "has_warnings": has_warns,
+                "has_reviews": has_reviews,
+                "rejects_count": len(validation_result.get('rejects', [])),
+                "warns_count": len(validation_result.get('warns', [])),
+                "reviews_count": len(validation_result.get('reviews', [])),
+                "projected_commission": order_strategy.get('projectedCommission', 0),
+                "projected_buying_power": order_strategy.get('projectedBuyingPower', 0),
+                "projected_available_fund": order_strategy.get('projectedAvailableFund', 0)
+            }
         }), 200
     except Exception as e:
         logger.error(f"Failed to preview order: {e}")
@@ -456,13 +551,15 @@ def preview_order(account_id: str):
 def get_positions():
     """
     Get current positions.
-    Schwab API: GET /accounts/{accountNumber}/positions
+    Schwab API: GET /accounts/{accountNumber}?fields=positions
+    
+    According to Schwab API documentation:
+    - Use GET /accounts/{accountNumber}?fields=positions to get positions for a specific account
+    - The fields=positions parameter includes positions in the response
     
     Query params:
         accountId: (optional) Account number. If not provided, uses first account.
     """
-    import requests
-    
     tokens = load_tokens()
     if not tokens or 'access_token' not in tokens:
         return jsonify({"error": "Not authenticated"}), 401
@@ -490,53 +587,34 @@ def get_positions():
         return jsonify({"error": "accountId required"}), 400
     
     try:
-        # Try the positions endpoint
-        url = f"{SCHWAB_ACCOUNTS_URL}/{account_id}/positions"
-        headers = {
-            "Authorization": f"Bearer {tokens['access_token']}",
-            "Accept": "application/json"
-        }
+        # Schwab API: Use /accounts/{accountNumber}?fields=positions
+        # According to API docs: GET /accounts/{accountNumber}?fields=positions returns specific account with positions
+        # This is more efficient than getting all accounts when we know the account number
         
-        logger.info(f"Requesting positions from: {url}")
-        response = requests.get(url, headers=headers, timeout=30)
+        account_url = f"{SCHWAB_ACCOUNTS_URL}/{account_id}"
+        params = {"fields": "positions"}
+        logger.info(f"Requesting account {account_id} with positions from: {account_url}?fields=positions")
         
-        if response.status_code != 200:
-            logger.error(f"Positions request failed: {response.status_code}")
-            logger.error(f"Response: {response.text}")
-            
-            # Try alternative: get account details which includes positions
-            if response.status_code == 400:
-                logger.warning("Direct positions endpoint failed, trying account details...")
-                account_url = f"{SCHWAB_ACCOUNTS_URL}/{account_id}"
-                account_response = requests.get(account_url, headers=headers, timeout=30)
-                if account_response.status_code == 200:
-                    account_data = account_response.json()
-                    # Extract positions from account data if available
-                    positions = []
-                    if isinstance(account_data, list) and len(account_data) > 0:
-                        securities_account = account_data[0].get('securitiesAccount', {})
-                        positions = securities_account.get('positions', [])
-                    return jsonify({"positions": positions}), 200
-            
-            try:
-                error_data = response.json()
-                return jsonify({
-                    "error": f"Schwab API error: {response.status_code}",
-                    "details": error_data
-                }), response.status_code
-            except:
-                return jsonify({
-                    "error": f"Schwab API error: {response.status_code}",
-                    "details": response.text[:500]
-                }), response.status_code
+        account_response = schwab_api_request("GET", account_url, tokens['access_token'], params=params)
+        account_data = account_response.json()
         
-        data = response.json()
-        logger.info("Retrieved positions successfully")
-        return jsonify(data), 200
+        # Extract positions from account data
+        positions = []
+        if isinstance(account_data, list) and len(account_data) > 0:
+            securities_account = account_data[0].get('securitiesAccount', {})
+            positions = securities_account.get('positions', [])
+            logger.info(f"Found {len(positions)} positions for account {account_id}")
+        elif isinstance(account_data, dict):
+            securities_account = account_data.get('securitiesAccount', {})
+            positions = securities_account.get('positions', [])
+            logger.info(f"Found {len(positions)} positions for account {account_id}")
         
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Request exception getting positions: {e}")
-        return jsonify({"error": f"Request failed: {str(e)}"}), 500
+        return jsonify({
+            "positions": positions,
+            "account_id": account_id,
+            "count": len(positions)
+        }), 200
+        
     except Exception as e:
         logger.error(f"Failed to get positions: {e}")
         return jsonify({"error": str(e)}), 500
@@ -545,36 +623,92 @@ def build_order_payload(data: dict) -> dict:
     """
     Build order payload for Schwab API.
     
+    According to Schwab API documentation, the order object structure includes:
+    - session: "NORMAL"
+    - duration: "DAY"
+    - orderType: "MARKET", "LIMIT", "STOP", etc.
+    - orderStrategyType: "SINGLE"
+    - orderLegCollection: array of order legs
+    
     Args:
-        data: Order data dictionary
+        data: Order data dictionary with:
+            - symbol: Stock symbol
+            - action: "BUY" or "SELL"
+            - quantity: Number of shares
+            - orderType: "MARKET", "LIMIT", "STOP", etc.
+            - price: (optional) For LIMIT orders
+            - stopPrice: (optional) For STOP orders
         
     Returns:
-        Formatted order payload
+        Formatted order payload matching Schwab API structure
     """
     order_type = data.get("orderType", "MARKET").upper()
+    action = data.get("action", "BUY").upper()
+    symbol = data.get("symbol", "")
+    quantity = int(data.get("quantity", 0))
     
-    payload = {
-        "orderType": order_type,
-        "session": "NORMAL",
-        "duration": "DAY",
-        "orderStrategyType": "SINGLE",
-        "orderLegCollection": [{
-            "instruction": data["action"],
-            "quantity": data["quantity"],
-            "instrument": {
-                "symbol": data["symbol"],
-                "assetType": "EQUITY"
-            }
-        }]
+    # Build base payload according to Schwab API structure
+    # Based on official Schwab API Order Object documentation
+    order_leg = {
+        "orderLegType": "EQUITY",
+        "instruction": action,
+        "quantity": quantity,
+        "instrument": {
+            "symbol": symbol,
+            "type": "EQUITY"
+        },
+        "positionEffect": data.get("positionEffect", "OPENING"),  # OPENING or CLOSING
+        "quantityType": data.get("quantityType", "ALL_SHARES")  # ALL_SHARES, DOLLAR, etc.
     }
     
-    # Add price for LIMIT orders
-    if order_type == "LIMIT" and "price" in data:
-        payload["price"] = float(data["price"])
+    # Add optional instrument fields if provided
+    if "cusip" in data:
+        order_leg["instrument"]["cusip"] = data["cusip"]
+    if "description" in data:
+        order_leg["instrument"]["description"] = data["description"]
     
-    # Add stop price for STOP orders
-    if order_type == "STOP" and "stopPrice" in data:
-        payload["stopPrice"] = float(data["stopPrice"])
+    payload = {
+        "session": data.get("session", "NORMAL"),  # NORMAL, AM, PM, SEAMLESS
+        "duration": data.get("duration", "DAY"),  # DAY, GOOD_TILL_CANCEL, FILL_OR_KILL, etc.
+        "orderType": order_type,
+        "orderStrategyType": "SINGLE",
+        "orderLegCollection": [order_leg],
+        "taxLotMethod": data.get("taxLotMethod", "FIFO")  # FIFO, LIFO, HIGH_COST, LOW_COST
+    }
+    
+    if "specialInstruction" in data:
+        payload["specialInstruction"] = data["specialInstruction"]
+    
+    if "activationPrice" in data:
+        payload["activationPrice"] = float(data["activationPrice"])
+    
+    if "cancelTime" in data:
+        payload["cancelTime"] = data["cancelTime"]
+    
+    if "releaseTime" in data:
+        payload["releaseTime"] = data["releaseTime"]
+    
+    # Add price for LIMIT orders (according to API docs)
+    if order_type == "LIMIT":
+        if "price" in data:
+            payload["price"] = float(data["price"])
+            payload["priceLinkBasis"] = "MANUAL"
+            payload["priceLinkType"] = "VALUE"
+        else:
+            raise ValueError("LIMIT orders require a price")
+    
+    # Add stop price for STOP orders (according to API docs)
+    if order_type == "STOP":
+        if "stopPrice" in data:
+            payload["stopPrice"] = float(data["stopPrice"])
+            payload["stopPriceLinkBasis"] = "MANUAL"
+            payload["stopPriceLinkType"] = "VALUE"
+            payload["stopType"] = "STANDARD"
+        else:
+            raise ValueError("STOP orders require a stopPrice")
+    
+    # Add tax lot method (default FIFO)
+    payload["taxLotMethod"] = data.get("taxLotMethod", "FIFO")
     
     return payload
 
@@ -648,11 +782,23 @@ def get_transactions(account_id: str):
     Get all transactions for a specific account.
     Schwab API: GET /accounts/{accountNumber}/transactions
     
+    According to Schwab API documentation:
+    - Maximum number of transactions: 3000
+    - Maximum date range: 1 year
+    - startDate and endDate are REQUIRED
+    - types parameter is REQUIRED
+    
     Query params:
-        startDate: YYYY-MM-DD
-        endDate: YYYY-MM-DD
-        symbol: Filter by symbol
-        types: Transaction types (TRADE, RECEIVE_AND_DELIVER, DIVIDEND_OR_INTEREST, etc.)
+        startDate: REQUIRED - ISO-8601 format: yyyy-MM-dd'T'HH:mm:ss.SSSZ
+                  Example: 2024-03-28T21:10:42.000Z
+        endDate: REQUIRED - ISO-8601 format: yyyy-MM-dd'T'HH:mm:ss.SSSZ
+                Example: 2024-05-10T21:10:42.000Z
+        types: REQUIRED - Transaction types (comma-separated)
+              Options: TRADE, RECEIVE_AND_DELIVER, DIVIDEND_OR_INTEREST, ACH_RECEIPT,
+                      ACH_DISBURSEMENT, CASH_RECEIPT, CASH_DISBURSEMENT, ELECTRONIC_FUND,
+                      WIRE_OUT, WIRE_IN, JOURNAL, MEMORANDUM, MARGIN_CALL, MONEY_MARKET,
+                      SMA_ADJUSTMENT
+        symbol: Optional - Filter by symbol (URL encoded if special characters)
     """
     tokens = load_tokens()
     if not tokens or 'access_token' not in tokens:
@@ -663,24 +809,50 @@ def get_transactions(account_id: str):
     symbol = request.args.get('symbol')
     transaction_types = request.args.get('types')
     
+    # Validate required parameters
+    if not start_date or not end_date:
+        return jsonify({
+            "error": "startDate and endDate are REQUIRED",
+            "format": "ISO-8601: yyyy-MM-dd'T'HH:mm:ss.SSSZ",
+            "example_startDate": "2024-03-28T21:10:42.000Z",
+            "example_endDate": "2024-05-10T21:10:42.000Z",
+            "note": "Maximum date range is 1 year"
+        }), 400
+    
+    if not transaction_types:
+        return jsonify({
+            "error": "types parameter is REQUIRED",
+            "available_types": [
+                "TRADE", "RECEIVE_AND_DELIVER", "DIVIDEND_OR_INTEREST", "ACH_RECEIPT",
+                "ACH_DISBURSEMENT", "CASH_RECEIPT", "CASH_DISBURSEMENT", "ELECTRONIC_FUND",
+                "WIRE_OUT", "WIRE_IN", "JOURNAL", "MEMORANDUM", "MARGIN_CALL", "MONEY_MARKET",
+                "SMA_ADJUSTMENT"
+            ],
+            "example": "types=TRADE,DIVIDEND_OR_INTEREST"
+        }), 400
+    
     try:
         url = f"{SCHWAB_TRANSACTIONS_URL}/{account_id}/transactions"
         
-        params = {}
-        if start_date:
-            params['startDate'] = start_date
-        if end_date:
-            params['endDate'] = end_date
+        params = {
+            'startDate': start_date,
+            'endDate': end_date,
+            'types': transaction_types
+        }
+        
         if symbol:
             params['symbol'] = symbol
-        if transaction_types:
-            params['types'] = transaction_types
         
         response = schwab_api_request("GET", url, tokens['access_token'], params=params)
         data = response.json()
         
-        logger.info(f"Retrieved transactions for account {account_id}")
-        return jsonify(data), 200
+        logger.info(f"Retrieved transactions for account {account_id} (types: {transaction_types})")
+        return jsonify({
+            "transactions": data if isinstance(data, list) else data.get('transactions', []),
+            "account_id": account_id,
+            "count": len(data) if isinstance(data, list) else len(data.get('transactions', [])),
+            "note": "Maximum 3000 transactions returned, maximum date range is 1 year"
+        }), 200
     except Exception as e:
         logger.error(f"Failed to get transactions: {e}")
         return jsonify({"error": str(e)}), 500

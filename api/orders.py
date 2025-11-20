@@ -635,6 +635,30 @@ def preview_order(account_id: str):
         except Exception as e:
             logger.warning(f"Could not get hash value for {account_id}, trying plain text: {e}")
             account_hash = account_id
+        
+        # Optional: Pre-check buying power before sending to API
+        # This helps provide better error messages
+        try:
+            account_response = schwab_api_request("GET", f"{SCHWAB_ACCOUNTS_URL}/{account_hash}", tokens['access_token'])
+            account_data = account_response.json()
+            if isinstance(account_data, list) and len(account_data) > 0:
+                account = account_data[0].get('securitiesAccount', {})
+                balances = account.get('currentBalances', {})
+                available_funds = balances.get('availableFunds', 0)
+                buying_power = balances.get('buyingPower', 0)
+                
+                # Calculate order cost
+                quantity = data.get('quantity', 0)
+                price = data.get('price', 0) if data.get('orderType', '').upper() == 'LIMIT' else 0
+                order_cost = quantity * price if price > 0 else 0
+                
+                # Warn if insufficient funds (but still try the API call)
+                if order_cost > 0 and order_cost > available_funds:
+                    logger.warning(f"Order cost (${order_cost:.2f}) exceeds available funds (${available_funds:.2f})")
+        except Exception as e:
+            logger.debug(f"Could not pre-check buying power: {e}")
+            # Continue anyway - let Schwab API validate
+        
         url = f"{SCHWAB_ACCOUNTS_URL}/{account_hash}/previewOrder"
         
         # Log the payload for debugging

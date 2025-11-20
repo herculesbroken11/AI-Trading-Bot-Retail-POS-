@@ -73,46 +73,6 @@ def get_account_hash_value(account_number: str, access_token: str) -> str:
         logger.error(f"Failed to get account hash value: {e}")
         raise
 
-@orders_bp.route('/account-numbers', methods=['GET'])
-def get_account_numbers():
-    """
-    Get list of account numbers and their encrypted hash values.
-    Schwab API: GET /accounts/accountNumbers
-    
-    According to Schwab API documentation:
-    - Account numbers in plain text cannot be used outside of headers or request/response bodies
-    - Must use encrypted hash values for all subsequent accountNumber requests
-    - This endpoint returns the mapping of plain text account numbers to encrypted hash values
-    """
-    tokens = load_tokens()
-    if not tokens or 'access_token' not in tokens:
-        return jsonify({"error": "Not authenticated"}), 401
-    
-    try:
-        response = schwab_api_request("GET", SCHWAB_ACCOUNT_NUMBERS_URL, tokens['access_token'])
-        account_numbers = response.json()
-        
-        # Handle both single object and array responses
-        if isinstance(account_numbers, dict):
-            account_numbers = [account_numbers]
-        
-        # Update cache
-        global _account_hash_cache
-        for acc in account_numbers:
-            acc_num = acc.get("accountNumber", "")
-            hash_val = acc.get("hashValue", "")
-            if acc_num and hash_val:
-                _account_hash_cache[acc_num] = hash_val
-        
-        logger.info(f"Retrieved {len(account_numbers)} account number(s)")
-        return jsonify({
-            "account_numbers": account_numbers,
-            "count": len(account_numbers)
-        }), 200
-    except Exception as e:
-        logger.error(f"Failed to get account numbers: {e}")
-        return jsonify({"error": str(e)}), 500
-
 @orders_bp.route('/accounts', methods=['GET'])
 def get_accounts():
     """

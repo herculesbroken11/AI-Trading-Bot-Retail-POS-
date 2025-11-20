@@ -348,7 +348,7 @@ def analyze_symbol(symbol: str):
         }
         
         url = SCHWAB_HISTORICAL_URL
-        logger.info(f"Requesting historical data with params: {params}")
+        logger.info(f"Requesting historical data for {symbol} with params: {params}")
         
         try:
             response = schwab_api_request("GET", url, tokens['access_token'], params=params)
@@ -358,13 +358,76 @@ def analyze_symbol(symbol: str):
             if "frequency" in str(e).lower() or "400" in str(e):
                 logger.warning("Frequency=1 failed, trying frequency=5")
                 params["frequency"] = "5"
-                response = schwab_api_request("GET", url, tokens['access_token'], params=params)
-                data = response.json()
+                try:
+                    response = schwab_api_request("GET", url, tokens['access_token'], params=params)
+                    data = response.json()
+                except Exception as e2:
+                    logger.error(f"Historical data request failed with both frequencies: {e2}")
+                    return jsonify({
+                        "error": "Failed to retrieve historical data",
+                        "details": str(e2),
+                        "symbol": symbol,
+                        "suggestion": "Check if market is open or try a different symbol"
+                    }), 500
             else:
-                raise
+                logger.error(f"Historical data request failed: {e}")
+                return jsonify({
+                    "error": "Failed to retrieve historical data",
+                    "details": str(e),
+                    "symbol": symbol
+                }), 500
         
-        if 'candles' not in data or not data['candles'] or len(data['candles']) == 0:
-            return jsonify({"error": "No historical data available"}), 404
+        # Log the response structure for debugging
+        logger.info(f"Historical data response keys: {list(data.keys()) if isinstance(data, dict) else 'Not a dict'}")
+        
+        if 'candles' not in data:
+            logger.warning(f"No 'candles' key in response. Response: {data}")
+            return jsonify({
+                "error": "No historical data available",
+                "symbol": symbol,
+                "response": data,
+                "suggestion": "Market may be closed or symbol may be invalid. Try during market hours (9:30 AM - 4:00 PM ET)"
+            }), 404
+        
+        candles = data.get('candles', [])
+        if not candles or len(candles) == 0:
+            logger.warning(f"Empty candles array for {symbol}. Response keys: {list(data.keys()) if isinstance(data, dict) else 'Not a dict'}")
+            
+            # Try getting data for previous day if today has no data
+            # This can happen if market is closed or it's before market open
+            logger.info(f"Trying to get data for previous day (period=2) for {symbol}")
+            try:
+                params_prev = {
+                    "symbol": symbol,
+                    "periodType": "day",
+                    "period": "2",  # Try 2 days to get yesterday's data
+                    "frequencyType": "minute",
+                    "frequency": "5",
+                    "needExtendedHoursData": "false"
+                }
+                response_prev = schwab_api_request("GET", url, tokens['access_token'], params=params_prev)
+                data_prev = response_prev.json()
+                candles_prev = data_prev.get('candles', [])
+                
+                if candles_prev and len(candles_prev) > 0:
+                    logger.info(f"Found data for previous day, using that instead")
+                    candles = candles_prev
+                    data['candles'] = candles
+                else:
+                    return jsonify({
+                        "error": "No historical data available",
+                        "symbol": symbol,
+                        "reason": "Empty candles array in API response for both today and previous day",
+                        "suggestion": "Market may be closed, symbol may be invalid, or no trading data available. Try during market hours (9:30 AM - 4:00 PM ET) or verify the symbol is correct"
+                    }), 404
+            except Exception as e:
+                logger.warning(f"Failed to get previous day data: {e}")
+                return jsonify({
+                    "error": "No historical data available",
+                    "symbol": symbol,
+                    "reason": "Empty candles array in API response",
+                    "suggestion": "Market may be closed or no data for this symbol. Try during market hours (9:30 AM - 4:00 PM ET)"
+                }), 404
         
         # Process data
         # Schwab API returns candles as list of arrays: [datetime, open, high, low, close, volume]
@@ -509,16 +572,57 @@ def analyze_symbol(symbol: str):
         # Get summary (handles missing indicators gracefully)
         try:
             summary = engine.get_market_summary(df)
+            # Always check fantastics, even if no setup is found
+            fantastics = engine.check_4_fantastics(df) if len(df) >= 200 else {
+                "fantastic_1": False,
+                "fantastic_2": False,
+                "fantastic_3": False,
+                "fantastic_4": False,
+                "all_fantastics": False
+            }
             setup = engine.identify_setup(df) if len(df) >= 200 else None
         except Exception as e:
             logger.error(f"Error generating summary/setup for {symbol}: {e}")
             summary = engine.get_market_summary(df)  # Will handle missing indicators
+            # Try to get fantastics even if setup fails
+            try:
+                fantastics = engine.check_4_fantastics(df) if len(df) >= 200 else {
+                    "fantastic_1": False,
+                    "fantastic_2": False,
+                    "fantastic_3": False,
+                    "fantastic_4": False,
+                    "all_fantastics": False
+                }
+            except:
+                fantastics = {
+                    "fantastic_1": False,
+                    "fantastic_2": False,
+                    "fantastic_3": False,
+                    "fantastic_4": False,
+                    "all_fantastics": False
+                }
             setup = None
+        
+        # Perform AI analysis
+        ai_signal = None
+        ai_error = None
+        try:
+            from ai.analyze import TradingAIAnalyzer
+            ai_analyzer = TradingAIAnalyzer()
+            ai_signal = ai_analyzer.analyze_market_data(symbol, summary, setup)
+            logger.info(f"AI analysis completed for {symbol}: {ai_signal.get('action', 'NONE')}")
+        except Exception as e:
+            logger.error(f"AI analysis failed for {symbol}: {e}")
+            ai_error = str(e)
+            # Don't fail the entire request if AI fails
         
         return jsonify({
             "symbol": symbol,
             "summary": summary,
             "setup": setup,
+            "fantastics": fantastics,  # Always include fantastics, even if setup is None
+            "ai_signal": ai_signal,  # AI analysis result
+            "ai_error": ai_error,  # AI error if any
             "data_points": len(df),
             "warning": "Insufficient data for full analysis" if len(df) < 200 else None
         }), 200

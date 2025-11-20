@@ -4,6 +4,15 @@
 
 This guide will help you test the entire system in development mode (`python main.py`) before moving to production with gunicorn.
 
+### ✨ Recent Major Updates
+
+1. **Automatic Token Refresh** - Tokens are refreshed 5 minutes before expiration automatically
+2. **Encrypted Account Hash Values** - All account-specific endpoints now use encrypted hash values (required by Schwab API)
+3. **Fixed Positions Endpoint** - Removed `fields=positions` parameter that caused 400 errors
+4. **Enhanced Error Handling** - Better error messages and automatic recovery
+
+See the "Recent Fixes & Updates" section for complete details.
+
 ---
 
 ## 📋 Pre-Testing Checklist
@@ -137,13 +146,20 @@ cat data/tokens.json | head -c 100
 curl http://localhost:5035/auth/status
 ```
 
-**Expected:** `{"authenticated": true, "expires_in": 1800}`
+**Expected:** `{"authenticated": true, "expires_in": 1800, "has_access_token": true, "has_refresh_token": true}`
+
+**Note:**
+- Tokens are automatically refreshed 5 minutes before expiration
+- The system tracks `expires_at` timestamp for proactive refresh
+- All API calls automatically check and refresh tokens if needed
+- No manual token refresh needed - system handles it automatically
 
 **✅ Success Criteria:**
 - OAuth flow completes
-- `data/tokens.json` file created
+- `data/tokens.json` file created with `expires_at` timestamp
 - Auth status shows authenticated
 - Automation scheduler started automatically (check logs)
+- Token refresh happens automatically (check logs for "Token automatically refreshed")
 
 ---
 
@@ -249,14 +265,43 @@ curl http://localhost:5035/orders/accounts
 
 **Note:** If you get 401, token may need refresh. Check logs.
 
-#### 4.2 Get Positions
+#### 4.2 Get Account Numbers and Hash Values
+
+**Important:** Schwab API requires encrypted hash values for account-specific endpoints. The system automatically handles this conversion.
+
+```bash
+# Get all account numbers and their encrypted hash values
+curl http://localhost:5035/orders/account-numbers
+```
+
+**Expected:** JSON with account mappings:
+```json
+{
+  "account_numbers": [
+    {
+      "accountNumber": "18056335",
+      "hashValue": "05248D7F2C2EC4994553B09A06938073F315AAF6E7E459A9D433EE965E5E34C2"
+    }
+  ],
+  "count": 1,
+  "note": "Use hashValue for all account-specific API calls"
+}
+```
+
+**Note:**
+- Account numbers in plain text cannot be used in URL paths
+- The system automatically converts plain text account numbers to encrypted hash values
+- Hash values are cached to avoid repeated API calls
+- All account-specific endpoints now use hash values automatically
+
+#### 4.3 Get Positions
 
 ```bash
 # Positions endpoint auto-detects account if not provided
 curl http://localhost:5035/orders/positions
 
-# Or specify account explicitly
-curl "http://localhost:5035/orders/positions?accountId=YOUR_ACCOUNT_ID"
+# Or specify account explicitly (plain text - system converts to hash automatically)
+curl "http://localhost:5035/orders/positions?accountId=18056335"
 ```
 
 **Expected:** JSON with current positions:
@@ -264,24 +309,26 @@ curl "http://localhost:5035/orders/positions?accountId=YOUR_ACCOUNT_ID"
 {
   "positions": [],
   "account_id": "18056335",
-  "count": 0
+  "count": 0,
+  "message": "No open positions"
 }
 ```
 
 **Note:** 
-- Uses Schwab API: `GET /accounts/{accountNumber}?fields=positions`
+- Uses Schwab API: `GET /accounts/{accountNumber}` (encrypted hash value in URL)
+- System automatically converts plain text account numbers to encrypted hash values
 - If no `accountId` is provided, the system automatically uses the first account
 - Empty array `[]` means no open positions (this is normal)
-- Positions are included in account details when `fields=positions` is specified
+- The `fields=positions` parameter is not used (causes 400 errors at account-specific endpoint)
 
-#### 4.3 Get All Orders
+#### 4.4 Get All Orders
 
 ```bash
 # Get orders for specific account (date parameters optional)
 curl "http://localhost:5035/orders/all-orders?accountId=18056335"
 
 # Get orders for specific account with date filter
-curl "http://localhost:5035/orders/all-orders?accountId=18056335&fromEnteredTime=2024-10-20T00:00:00.000Z&toEnteredTime=2024-11-20T23:59:59.000Z"
+curl "http://localhost:5035/orders/all-orders?accountId=18056335&fromEnteredTime=2025-10-20T00:00:00.000Z&toEnteredTime=2025-11-20T23:59:59.000Z"
 
 # Get all orders for ALL accounts (date parameters REQUIRED)
 curl "http://localhost:5035/orders/all-orders?fromEnteredTime=2024-10-20T00:00:00.000Z&toEnteredTime=2024-11-20T23:59:59.000Z&maxResults=100"
@@ -296,10 +343,11 @@ curl "http://localhost:5035/orders/all-orders?fromEnteredTime=2024-10-20T00:00:0
 - Maximum date range: 60 days for all-accounts, 1 year for account-specific
 
 **✅ Success Criteria:**
+- Can retrieve account numbers and hash values
 - Can retrieve account information
-- Can retrieve positions
+- Can retrieve positions (empty array is normal)
 - Can retrieve orders
-- No 401/403 errors
+- No 401/403/400 errors
 
 ---
 
@@ -799,22 +847,35 @@ sudo kill -9 <PID>
 ### Issue: Token expired (401 errors)
 
 **Solution:**
-```bash
-# Refresh token
-curl -X POST http://localhost:5035/auth/refresh
+- **Automatic refresh is now enabled!** Tokens refresh 5 minutes before expiration
+- If you still get 401, check that refresh token exists:
+  ```bash
+  cat data/tokens.json | grep refresh_token
+  ```
+- Manual refresh (if needed):
+  ```bash
+  curl -X POST http://localhost:5035/auth/refresh
+  ```
+- Or re-authenticate:
+  ```bash
+  curl http://localhost:5035/auth/login
+  # Follow the auth_url in response
+  ```
+- Check token expiration:
+  ```bash
+  # View expires_at timestamp
+  cat data/tokens.json | grep expires_at
+  ```
 
-# Or re-authenticate
-curl http://localhost:5035/auth/login
-# Follow the auth_url in response
-```
-
-### Issue: Positions endpoint returns 404
+### Issue: Positions endpoint returns 400 or 404
 
 **Solution:**
-- This has been fixed! The endpoint now uses `GET /accounts/{accountNumber}?fields=positions`
-- If you still get 404, check that accountId is correct
-- The endpoint will return an empty array `[]` if no positions exist
+- This has been fixed! The endpoint now uses encrypted hash values automatically
+- The system converts plain text account numbers to encrypted hash values
+- If you get 400, the account number might not exist - verify with `/orders/account-numbers`
+- The endpoint will return an empty array `[]` if no positions exist (this is normal)
 - Verify account: `curl http://localhost:5035/orders/accounts`
+- Get account hash: `curl http://localhost:5035/orders/account-numbers`
 
 ### Issue: Historical data shows incorrect prices (e.g., 805517 instead of ~275)
 
@@ -941,10 +1002,26 @@ After all tests pass, you're ready to move to production with gunicorn!
 ## 📌 Recent Fixes & Updates
 
 ### Fixed Issues:
-1. **Positions Endpoint (404 Error)**
-   - Fixed: Now uses `GET /accounts/{accountNumber}?fields=positions` (official API method)
+1. **Positions Endpoint (400 Error)**
+   - Fixed: Now uses encrypted hash values instead of plain text account numbers
+   - Removed `fields=positions` parameter (causes 400 errors at account-specific endpoint)
+   - System automatically converts plain text account numbers to encrypted hash values
    - Auto-detects account if not provided
    - Returns empty array if no positions (not an error)
+
+2. **Account Number Encryption**
+   - Added: Automatic conversion of plain text account numbers to encrypted hash values
+   - Added: `/orders/account-numbers` endpoint to get account number mappings
+   - Added: Caching for account number → hash value mappings
+   - Fixed: All account-specific endpoints now use encrypted hash values
+   - According to Schwab API: Account numbers in plain text cannot be used in URL paths
+
+3. **Automatic Token Refresh**
+   - Added: Proactive token refresh 5 minutes before expiration
+   - Added: Token expiration tracking with `expires_at` timestamp
+   - Updated: All API calls automatically refresh tokens if needed
+   - Updated: Quotes endpoints with automatic token refresh on 401 errors
+   - Benefits: No more 401 errors due to expired tokens, seamless operation
 
 2. **Historical Data Column Misalignment**
    - Fixed: Auto-detects column order from Schwab API response
@@ -982,13 +1059,18 @@ After all tests pass, you're ready to move to production with gunicorn!
    - Validates date range (60 days for all-accounts, 1 year for account-specific)
 
 ### API Endpoint Updates:
-- `/orders/positions` - Uses `GET /accounts/{accountNumber}?fields=positions` (official API method)
-- `/orders/all-orders` - Requires date parameters for all-accounts endpoint
-- `/orders/<account_id>/transactions` - Requires startDate, endDate, and types parameters
-- `/orders/<account_id>/preview` - Enhanced with validation summary extraction
-- `/orders/place` and `/orders/signal` - Handle 201 response with Location header
+- `/orders/account-numbers` - **NEW**: Get account numbers and encrypted hash values
+- `/orders/positions` - Uses encrypted hash values, removed `fields=positions` parameter
+- `/orders/account/<account_id>` - Uses encrypted hash values automatically
+- `/orders/place` - Uses encrypted hash values, handles 201 response with Location header
+- `/orders/signal` - Uses encrypted hash values, handles 201 response with Location header
+- `/orders/all-orders` - Uses encrypted hash values, requires date parameters for all-accounts endpoint
+- `/orders/<account_id>/orders/<order_id>` - Uses encrypted hash values (GET/PUT/DELETE)
+- `/orders/<account_id>/preview` - Uses encrypted hash values, enhanced with validation summary
+- `/orders/<account_id>/transactions` - Uses encrypted hash values, requires startDate, endDate, and types
 - `/quotes/historical/<symbol>` - Auto-detects column order, handles insufficient data
-- `/quotes/analyze/<symbol>` - Improved error handling, better data validation
+- `/quotes/analyze/<symbol>` - Improved error handling, better data validation, automatic token refresh
+- All quotes endpoints - Automatic token refresh on 401 errors
 
 ### Order Payload Updates:
 - Matches official Schwab API Order Object structure
@@ -1013,10 +1095,13 @@ curl http://localhost:5035/quotes/analyze/AAPL
 # Quick automation check
 curl http://localhost:5035/automation/status
 
-# Quick positions check (auto-detects account)
+# Quick account numbers check (get hash values)
+curl http://localhost:5035/orders/account-numbers
+
+# Quick positions check (auto-detects account, uses encrypted hash automatically)
 curl http://localhost:5035/orders/positions
 
-# Quick orders check (account-specific, no dates needed)
+# Quick orders check (account-specific, no dates needed, uses encrypted hash automatically)
 ACCOUNT_ID=$(curl -s http://localhost:5035/orders/accounts | jq -r '.[0].securitiesAccount.accountNumber')
 curl "http://localhost:5035/orders/all-orders?accountId=$ACCOUNT_ID"
 
@@ -1027,7 +1112,97 @@ curl "http://localhost:5035/orders/$ACCOUNT_ID/transactions?startDate=2024-11-01
 **All should return valid JSON responses!**
 
 **Note:** 
-- Positions endpoint auto-detects account
+- Account numbers are automatically converted to encrypted hash values
+- Positions endpoint auto-detects account and uses encrypted hash
 - Orders endpoint works without dates for account-specific queries
 - Transactions endpoint requires startDate, endDate, and types
+- All endpoints automatically refresh tokens before expiration
+
+---
+
+## 📋 Summary of Recent Changes
+
+### 🔄 Automatic Token Refresh System
+
+**What Changed:**
+- Tokens are now automatically refreshed 5 minutes before expiration
+- System tracks `expires_at` timestamp when tokens are saved
+- All API calls check token validity before making requests
+- No more 401 errors due to expired tokens
+
+**How It Works:**
+1. When tokens are saved, system calculates `expires_at = current_time + expires_in - 300` (5 min buffer)
+2. Before each API call, system checks if `current_time >= expires_at`
+3. If expired/expiring, automatically refreshes using refresh token
+4. Saves new tokens with updated `expires_at`
+5. Proceeds with API call using fresh token
+
+**Benefits:**
+- Seamless operation without manual intervention
+- No more 401 errors
+- Automatic recovery from token expiration
+- Works across all endpoints
+
+### 🔐 Encrypted Account Hash Values
+
+**What Changed:**
+- All account-specific endpoints now use encrypted hash values instead of plain text account numbers
+- Added `/orders/account-numbers` endpoint to get account number mappings
+- System automatically converts plain text account numbers to encrypted hash values
+- Hash values are cached to avoid repeated API calls
+
+**Why:**
+According to Schwab API documentation:
+- Account numbers in plain text cannot be used in URL paths
+- Must use encrypted hash values from `/accounts/accountNumbers` endpoint
+- Example: `18056335` → `05248D7F2C2EC4994553B09A06938073F315AAF6E7E459A9D433EE965E5E34C2`
+
+**Endpoints Updated:**
+- `/orders/account/<account_id>` - Get account details
+- `/orders/positions` - Get positions
+- `/orders/place` - Place orders
+- `/orders/signal` - Execute signals
+- `/orders/all-orders` - Get orders (account-specific)
+- `/orders/<account_id>/orders/<order_id>` - Get/cancel/replace orders
+- `/orders/<account_id>/preview` - Preview orders
+- `/orders/<account_id>/transactions` - Get transactions
+
+**How to Use:**
+- You can still use plain text account numbers in requests (e.g., `?accountId=18056335`)
+- System automatically converts to encrypted hash value
+- Or get hash values manually: `GET /orders/account-numbers`
+
+### 🐛 Fixed Positions Endpoint
+
+**What Changed:**
+- Removed `fields=positions` parameter (caused 400 errors at account-specific endpoint)
+- Now uses `GET /accounts/{accountNumber}` without fields parameter
+- Positions are included in response if they exist
+- Returns empty array if no positions (normal behavior)
+
+**Before:**
+```bash
+# This caused 400 error
+GET /accounts/18056335?fields=positions
+```
+
+**After:**
+```bash
+# This works correctly
+GET /accounts/05248D7F2C2EC4994553B09A06938073F315AAF6E7E459A9D433EE965E5E34C2
+# Positions included in response if they exist
+```
+
+### 🔧 Enhanced Error Handling
+
+**What Changed:**
+- Better error messages with suggestions
+- Automatic token refresh on 401 errors (quotes endpoints)
+- Fallback mechanisms for hash value lookup
+- Improved logging for debugging
+
+**Benefits:**
+- Easier troubleshooting
+- Automatic recovery from common errors
+- Better user experience
 

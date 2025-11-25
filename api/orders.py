@@ -902,23 +902,25 @@ def build_order_payload(data: dict) -> dict:
     symbol = data.get("symbol", "")
     quantity = int(data.get("quantity", 0))
     
-    # Build order leg according to Schwab API Order Object structure
+    if quantity <= 0:
+        raise ValueError("Quantity must be greater than 0")
+    
+    # Build order leg according to working example from Medium article
+    # Key differences: use assetType instead of type, include legId, no quantityType
+    leg_id = data.get("legId", 1)  # Default to 1 (can be int or string, but int is cleaner)
     order_leg = {
         "orderLegType": "EQUITY",
-        "instruction": action,
-        "quantity": quantity,
+        "legId": int(leg_id) if isinstance(leg_id, (int, str)) and str(leg_id).isdigit() else 1,
         "instrument": {
             "symbol": symbol,
-            "type": "EQUITY"
+            "assetType": "EQUITY"  # Use assetType instead of type (per Medium article)
         },
+        "instruction": action,
         "positionEffect": data.get("positionEffect", "OPENING"),  # OPENING or CLOSING
-        "quantityType": data.get("quantityType", "ALL_SHARES")  # ALL_SHARES, DOLLAR, etc.
+        "quantity": quantity  # Use numeric value
     }
     
     # Add optional order leg fields if provided
-    if "legId" in data:
-        order_leg["legId"] = int(data["legId"])
-    
     if "cusip" in data:
         order_leg["instrument"]["cusip"] = data["cusip"]
     
@@ -937,16 +939,28 @@ def build_order_payload(data: dict) -> dict:
     if "toSymbol" in data:
         order_leg["toSymbol"] = data["toSymbol"]
     
-    # Build base payload according to Schwab API Order Object structure
+    # Build base payload according to working example from Medium article
+    # Key: include quantity and price at top level
     payload = {
         "session": data.get("session", "NORMAL"),  # NORMAL, AM, PM, SEAMLESS
         "duration": data.get("duration", "DAY"),  # DAY, GOOD_TILL_CANCEL, FILL_OR_KILL, etc.
         "orderType": order_type,
         "complexOrderStrategyType": data.get("complexOrderStrategyType", "NONE"),  # NONE, COVERED, etc.
-        "orderStrategyType": "SINGLE",
+        "quantity": quantity,  # Include at top level per Medium article
+        "taxLotMethod": data.get("taxLotMethod", "FIFO"),  # FIFO, LIFO, HIGH_COST, LOW_COST, AVERAGE_COST, SPECIFIC_LOT
         "orderLegCollection": [order_leg],
-        "taxLotMethod": data.get("taxLotMethod", "FIFO")  # FIFO, LIFO, HIGH_COST, LOW_COST, AVERAGE_COST, SPECIFIC_LOT
+        "orderStrategyType": "SINGLE"
     }
+    
+    # Add price at top level (for LIMIT orders, required; for others, optional)
+    if order_type == "LIMIT":
+        if "price" in data:
+            payload["price"] = float(data["price"])  # Use numeric value
+        else:
+            raise ValueError("LIMIT orders require a price")
+    elif "price" in data:
+        # Allow price for other order types if provided
+        payload["price"] = float(data["price"])
     
     # Add optional order-level fields if provided
     if "specialInstruction" in data:
@@ -964,29 +978,17 @@ def build_order_payload(data: dict) -> dict:
     if "destinationLinkName" in data:
         payload["destinationLinkName"] = data["destinationLinkName"]
     
-    # Add price for LIMIT orders (according to API docs)
-    if order_type == "LIMIT":
-        if "price" in data:
-            payload["price"] = float(data["price"])
-            # priceLinkBasis and priceLinkType are optional - only add if specified
-            if "priceLinkBasis" in data:
-                payload["priceLinkBasis"] = data["priceLinkBasis"]  # MANUAL, BASIS, etc.
-            if "priceLinkType" in data:
-                payload["priceLinkType"] = data["priceLinkType"]  # VALUE, PERCENT, etc.
-        else:
-            raise ValueError("LIMIT orders require a price")
-    
-    # Add stop price for STOP orders (according to API docs)
+    # Add stop price for STOP orders
     if order_type == "STOP" or order_type == "STOP_LIMIT":
         if "stopPrice" in data:
             payload["stopPrice"] = float(data["stopPrice"])
-            # stopPriceLinkBasis, stopPriceLinkType, stopType, and stopPriceOffset are optional
+            # Optional stop-related fields
             if "stopPriceLinkBasis" in data:
-                payload["stopPriceLinkBasis"] = data["stopPriceLinkBasis"]  # MANUAL, BASIS, etc.
+                payload["stopPriceLinkBasis"] = data["stopPriceLinkBasis"]
             if "stopPriceLinkType" in data:
-                payload["stopPriceLinkType"] = data["stopPriceLinkType"]  # VALUE, PERCENT, etc.
+                payload["stopPriceLinkType"] = data["stopPriceLinkType"]
             if "stopType" in data:
-                payload["stopType"] = data["stopType"]  # STANDARD, BID, ASK, LAST, MARK
+                payload["stopType"] = data["stopType"]
             if "stopPriceOffset" in data:
                 payload["stopPriceOffset"] = float(data["stopPriceOffset"])
         else:

@@ -271,7 +271,7 @@ curl http://localhost:5035/orders/accounts
 
 ```bash
 # Get all account numbers and their encrypted hash values
-curl http://localhost:5035/orders/account-numbers
+curl http://localhost:5035/ 
 ```
 
 **Expected:** JSON with account mappings:

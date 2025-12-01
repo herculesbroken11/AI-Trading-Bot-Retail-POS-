@@ -6,10 +6,11 @@ This guide will help you test the entire system in development mode (`python mai
 
 ### ✨ Recent Major Updates
 
-1. **Automatic Token Refresh** - Tokens are refreshed 5 minutes before expiration automatically
-2. **Encrypted Account Hash Values** - All account-specific endpoints now use encrypted hash values (required by Schwab API)
-3. **Fixed Positions Endpoint** - Removed `fields=positions` parameter that caused 400 errors
-4. **Enhanced Error Handling** - Better error messages and automatic recovery
+1. **✅ Order Payload Structure Fixed** - Updated to match verified working structure (quantity/price at top level, assetType instead of type, legId included)
+2. **Automatic Token Refresh** - Tokens are refreshed 5 minutes before expiration automatically
+3. **Encrypted Account Hash Values** - All account-specific endpoints now use encrypted hash values (required by Schwab API)
+4. **Fixed Positions Endpoint** - Removed `fields=positions` parameter that caused 400 errors
+5. **Enhanced Error Handling** - Better error messages and automatic recovery
 
 See the "Recent Fixes & Updates" section for complete details.
 
@@ -533,23 +534,68 @@ curl -X POST http://localhost:5035/orders/$ACCOUNT_ID/preview \
 {
   "message": "Order preview generated",
   "preview": {
+    "commissionAndFee": {
+      "commission": { ... },
+      "fee": { ... },
+      "trueCommission": { ... }
+    },
+    "orderId": 0,
+    "orderStrategy": {
+      "accountNumber": "18056335",
+      "status": "ACCEPTED",
+      "orderType": "LIMIT",
+      "price": 13.5,
+      "quantity": 1.0,
+      "orderBalance": {
+        "orderValue": 13.5,
+        "projectedAvailableFund": 3.7,
+        "projectedBuyingPower": 3.7,
+        "projectedCommission": 0.0
+      },
+      "orderLegs": [
+        {
+          "instruction": "BUY",
+          "instrument": {
+            "symbol": "AAL",
+            "assetType": "EQUITY"
+          },
+          "askPrice": 13.56,
+          "bidPrice": 13.55,
+          "lastPrice": 13.555,
+          "legId": 1
+        }
+      ]
+    },
     "orderValidationResult": {
       "rejects": [],
-      "warns": [],
+      "warns": [
+        {
+          "activityMessage": "Executing one more day trade/round trip will cause this account to be restricted to closing transactions only.",
+          "originalSeverity": "WARN"
+        }
+      ],
       "reviews": []
-    },
-    "orderStrategy": {
-      "projectedCommission": 0,
-      "projectedBuyingPower": 0
     }
   },
   "summary": {
     "valid": true,
-    "has_warnings": false,
+    "has_warnings": true,
+    "rejects_count": 0,
+    "warns_count": 1,
+    "reviews_count": 0,
+    "projected_available_fund": 0,
+    "projected_buying_power": 0,
     "projected_commission": 0
   }
 }
 ```
+
+**✅ Success Indicators:**
+- `status: "ACCEPTED"` in `orderStrategy` (no rejects)
+- `rejects_count: 0` in summary
+- `projectedBuyingPower` and `projectedAvailableFund` show available funds after order
+- Commission and fee breakdown provided
+- Warnings may appear (e.g., day trading restrictions) but don't prevent order placement
 
 #### 9.2 Test Signal Execution
 
@@ -1038,9 +1084,17 @@ After all tests pass, you're ready to move to production with gunicorn!
    - Uses helper functions instead of Flask route handlers
    - Direct API calls for better performance
 
-5. **Order Payload Structure**
-   - Fixed: Now matches official Schwab API Order Object structure
-   - Includes positionEffect, quantityType, taxLotMethod fields
+5. **Order Payload Structure** ✅ **FIXED - Now Working!**
+   - Fixed: Updated to match working structure from verified Medium article example
+   - Key changes:
+     - `quantity` now included at top level (not just in orderLegCollection)
+     - `price` included at top level for LIMIT orders
+     - Changed `instrument.type` to `instrument.assetType` (required by API)
+     - Always includes `legId` in order leg (defaults to 1)
+     - Removed `quantityType` from order leg (not required)
+     - Removed unnecessary `priceLinkBasis`/`priceLinkType` defaults
+   - Result: Order previews now work successfully with "ACCEPTED" status
+   - Includes positionEffect, taxLotMethod fields
    - Proper handling of LIMIT and STOP orders
 
 6. **Order Placement Response**
@@ -1073,10 +1127,16 @@ After all tests pass, you're ready to move to production with gunicorn!
 - All quotes endpoints - Automatic token refresh on 401 errors
 
 ### Order Payload Updates:
-- Matches official Schwab API Order Object structure
-- Includes positionEffect, quantityType, taxLotMethod fields
-- Supports optional fields (session, duration, specialInstruction, etc.)
-- Proper handling of LIMIT and STOP orders with price link fields
+- ✅ **FIXED**: Now matches working structure from verified Medium article example
+- Key structure:
+  - `quantity` at top level (required)
+  - `price` at top level for LIMIT orders (required)
+  - `instrument.assetType` instead of `instrument.type` (required)
+  - `legId` always included in order leg (defaults to 1)
+  - Includes positionEffect, taxLotMethod fields
+  - Supports optional fields (session, duration, specialInstruction, etc.)
+  - Proper handling of LIMIT and STOP orders
+- **Result**: Order previews return "ACCEPTED" status with full validation results
 
 ---
 

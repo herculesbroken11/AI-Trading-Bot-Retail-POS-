@@ -36,6 +36,9 @@ def daily_report():
     if not account_id:
         return jsonify({"error": "accountId required"}), 400
     
+    # Ensure account_id is always a string
+    account_id = str(account_id).strip()
+    
     try:
         access_token = get_valid_access_token()
         if not access_token:
@@ -46,8 +49,9 @@ def daily_report():
         
         account_hash = None
         try:
+            # Ensure account_id is passed as string
             account_hash = get_account_hash_value(account_id, access_token)
-            logger.info(f"Using encrypted hash for account {account_id}")
+            logger.info(f"Using encrypted hash for account {account_id}: {account_hash[:20]}...")
         except Exception as e:
             logger.warning(f"Failed to get account hash value: {e}")
             # Try to get account from accounts list as fallback
@@ -91,7 +95,26 @@ def daily_report():
                     "suggestion": "Account number must be converted to encrypted hash value. Try calling /orders/account-numbers first, or verify the account ID is correct."
                 }), 400
         
+        # Final validation - ensure we have a valid hash and it's not the plain account number
+        if not account_hash:
+            logger.error(f"Account hash is None for account {account_id}")
+            return jsonify({
+                "error": "Failed to get account hash value",
+                "account_id_provided": account_id,
+                "suggestion": "Account number must be converted to encrypted hash value. Try calling /orders/account-numbers first."
+            }), 400
+        
+        if account_hash == account_id or account_hash == str(account_id):
+            logger.error(f"Account hash equals account ID - invalid! hash={account_hash}, account_id={account_id}")
+            return jsonify({
+                "error": "Invalid account hash value",
+                "details": "Account hash equals account ID, which should not happen",
+                "account_id_provided": account_id,
+                "suggestion": "The system failed to convert account number to encrypted hash. Please check server logs."
+            }), 500
+        
         url = f"{SCHWAB_ACCOUNTS_URL}/{account_hash}"
+        logger.info(f"Making request to Schwab API: {url}")
         try:
             response = schwab_api_request("GET", url, access_token)
             account_data = response.json()

@@ -35,7 +35,7 @@ def get_account_hash_value(account_number: str, access_token: str) -> str:
     Must use encrypted hash values for all accountNumber requests.
     
     Args:
-        account_number: Plain text account number (e.g., "18056335")
+        account_number: Plain text account number (e.g., "18056335" or 18056335)
         access_token: OAuth access token
         
     Returns:
@@ -43,12 +43,17 @@ def get_account_hash_value(account_number: str, access_token: str) -> str:
     """
     global _account_hash_cache
     
-    # Check cache first
-    if account_number in _account_hash_cache:
-        return _account_hash_cache[account_number]
+    # Ensure account_number is always a string for consistent comparison
+    account_number_str = str(account_number).strip()
+    
+    # Check cache first (using string key)
+    if account_number_str in _account_hash_cache:
+        logger.debug(f"Using cached hash for account {account_number_str}")
+        return _account_hash_cache[account_number_str]
     
     try:
         # Get all account numbers and their hash values
+        logger.info(f"Fetching account numbers from Schwab API...")
         response = schwab_api_request("GET", SCHWAB_ACCOUNT_NUMBERS_URL, access_token)
         account_numbers = response.json()
         
@@ -56,30 +61,51 @@ def get_account_hash_value(account_number: str, access_token: str) -> str:
         if isinstance(account_numbers, dict):
             account_numbers = [account_numbers]
         
-        # Find matching account number and cache all mappings
-        # Convert both to strings for comparison (account numbers can be numbers or strings)
-        account_number_str = str(account_number).strip()
+        logger.info(f"Received {len(account_numbers)} account number(s) from API")
         
+        # Log all account numbers received for debugging
+        all_accounts = []
         for acc in account_numbers:
-            acc_num = str(acc.get("accountNumber", "")).strip()
-            hash_val = acc.get("hashValue", "").strip()
+            acc_num_raw = acc.get("accountNumber", "")
+            acc_num = str(acc_num_raw).strip() if acc_num_raw else ""
+            all_accounts.append(acc_num)
+            logger.debug(f"API returned account: {acc_num} (type: {type(acc_num_raw)})")
+        
+        logger.info(f"Looking for account '{account_number_str}' (type: {type(account_number_str)}) in: {all_accounts}")
+        
+        # Find matching account number and cache all mappings
+        for acc in account_numbers:
+            # Account number can be string or number in API response - convert to string
+            acc_num_raw = acc.get("accountNumber", "")
+            acc_num = str(acc_num_raw).strip() if acc_num_raw else ""
+            hash_val = str(acc.get("hashValue", "")).strip() if acc.get("hashValue") else ""
+            
             if acc_num and hash_val:
+                # Cache all account numbers we find (using string keys)
                 _account_hash_cache[acc_num] = hash_val
-                # Compare as strings
+                logger.debug(f"Cached: account '{acc_num}' -> hash '{hash_val[:20]}...'")
+                
+                # Compare as strings (exact match)
                 if acc_num == account_number_str:
-                    logger.info(f"Found hash value for account {account_number}")
+                    logger.info(f"✓ Match found! Account '{account_number_str}' -> hash '{hash_val[:20]}...'")
                     return hash_val
+                else:
+                    logger.debug(f"  No match: '{acc_num}' != '{account_number_str}'")
         
         # If not found, raise error with available account numbers for debugging
         available_accounts = [str(acc.get("accountNumber", "")) for acc in account_numbers if acc.get("accountNumber")]
+        logger.error(f"Account number '{account_number_str}' not found. Available: {available_accounts}")
         raise ValueError(
-            f"Account number '{account_number}' not found in account numbers list. "
+            f"Account number '{account_number_str}' not found in account numbers list. "
             f"Available accounts: {available_accounts}"
         )
         
-    except Exception as e:
-        logger.error(f"Failed to get account hash value: {e}")
+    except ValueError:
+        # Re-raise ValueError (our custom error)
         raise
+    except Exception as e:
+        logger.error(f"Failed to get account hash value: {e}", exc_info=True)
+        raise ValueError(f"Failed to retrieve account hash value: {str(e)}")
 
 @orders_bp.route('/accounts', methods=['GET'])
 def get_accounts():

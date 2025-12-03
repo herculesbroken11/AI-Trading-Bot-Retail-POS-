@@ -41,16 +41,72 @@ def daily_report():
         if not access_token:
             return jsonify({"error": "Not authenticated"}), 401
         
-        # Get account information
-        from api.orders import get_account_hash_value
+        # Get account information - must use encrypted hash value
+        from api.orders import get_account_hash_value, SCHWAB_ACCOUNTS_URL as ORDERS_ACCOUNTS_URL
+        
+        account_hash = None
         try:
             account_hash = get_account_hash_value(account_id, access_token)
-        except:
-            account_hash = account_id
+            logger.info(f"Using encrypted hash for account {account_id}")
+        except Exception as e:
+            logger.warning(f"Failed to get account hash value: {e}")
+            # Try to get account from accounts list as fallback
+            try:
+                logger.info(f"Attempting to get account from accounts list...")
+                accounts_response = schwab_api_request("GET", ORDERS_ACCOUNTS_URL, access_token)
+                accounts = accounts_response.json()
+                
+                # Handle both dict and list responses
+                if isinstance(accounts, dict):
+                    accounts = [accounts]
+                
+                # Find matching account
+                account_id_str = str(account_id).strip()
+                for acc in accounts:
+                    sec_account = acc.get("securitiesAccount", acc)
+                    acc_num = str(sec_account.get("accountNumber", "")).strip()
+                    if acc_num == account_id_str:
+                        # Try to get hash value again with the found account number
+                        try:
+                            account_hash = get_account_hash_value(acc_num, access_token)
+                            logger.info(f"Found account and hash value via accounts list")
+                            break
+                        except:
+                            pass
+                
+                if not account_hash:
+                    return jsonify({
+                        "error": "Failed to get account hash value",
+                        "details": str(e),
+                        "account_id_provided": account_id,
+                        "suggestion": "Account number must be converted to encrypted hash value. Try calling /orders/account-numbers first, or verify the account ID is correct."
+                    }), 400
+            except Exception as fallback_error:
+                logger.error(f"Fallback account lookup also failed: {fallback_error}")
+                return jsonify({
+                    "error": "Failed to get account hash value",
+                    "details": str(e),
+                    "fallback_error": str(fallback_error),
+                    "account_id_provided": account_id,
+                    "suggestion": "Account number must be converted to encrypted hash value. Try calling /orders/account-numbers first, or verify the account ID is correct."
+                }), 400
         
         url = f"{SCHWAB_ACCOUNTS_URL}/{account_hash}"
-        response = schwab_api_request("GET", url, access_token)
-        account_data = response.json()
+        try:
+            response = schwab_api_request("GET", url, access_token)
+            account_data = response.json()
+        except Exception as api_error:
+            error_str = str(api_error)
+            logger.error(f"Schwab API error: {error_str}")
+            # If it's a 400 error about invalid account, provide helpful message
+            if "Invalid account number" in error_str or "400" in error_str:
+                return jsonify({
+                    "error": "Invalid account number or hash value",
+                    "details": error_str,
+                    "account_id_provided": account_id,
+                    "suggestion": "Ensure account ID is correct. The system should automatically convert it to encrypted hash value."
+                }), 400
+            raise
         
         # Get today's trades from database (preferred) or CSV (fallback)
         try:

@@ -57,17 +57,25 @@ def get_account_hash_value(account_number: str, access_token: str) -> str:
             account_numbers = [account_numbers]
         
         # Find matching account number and cache all mappings
+        # Convert both to strings for comparison (account numbers can be numbers or strings)
+        account_number_str = str(account_number).strip()
+        
         for acc in account_numbers:
-            acc_num = acc.get("accountNumber", "")
-            hash_val = acc.get("hashValue", "")
+            acc_num = str(acc.get("accountNumber", "")).strip()
+            hash_val = acc.get("hashValue", "").strip()
             if acc_num and hash_val:
                 _account_hash_cache[acc_num] = hash_val
-                if acc_num == account_number:
+                # Compare as strings
+                if acc_num == account_number_str:
                     logger.info(f"Found hash value for account {account_number}")
                     return hash_val
         
-        # If not found, raise error
-        raise ValueError(f"Account number {account_number} not found in account numbers list")
+        # If not found, raise error with available account numbers for debugging
+        available_accounts = [str(acc.get("accountNumber", "")) for acc in account_numbers if acc.get("accountNumber")]
+        raise ValueError(
+            f"Account number '{account_number}' not found in account numbers list. "
+            f"Available accounts: {available_accounts}"
+        )
         
     except Exception as e:
         logger.error(f"Failed to get account hash value: {e}")

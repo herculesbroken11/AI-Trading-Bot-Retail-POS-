@@ -17,11 +17,14 @@ from utils.database import (
 )
 from ai.analyze import TradingAIAnalyzer
 
+# Import Schwab API constants from orders module (single source of truth)
+from api.orders import (
+    SCHWAB_BASE_URL,
+    SCHWAB_ACCOUNTS_URL
+)
+
 reports_bp = Blueprint('reports', __name__, url_prefix='/reports')
 logger = setup_logger("reports")
-
-SCHWAB_BASE_URL = "https://api.schwabapi.com"
-SCHWAB_ACCOUNTS_URL = f"{SCHWAB_BASE_URL}/trader/v1/accounts"
 
 @reports_bp.route('/daily', methods=['GET'])
 def daily_report():
@@ -45,7 +48,7 @@ def daily_report():
             return jsonify({"error": "Not authenticated"}), 401
         
         # Get account information - must use encrypted hash value
-        from api.orders import get_account_hash_value, SCHWAB_ACCOUNTS_URL as ORDERS_ACCOUNTS_URL
+        from api.orders import get_account_hash_value
         
         account_hash = None
         try:
@@ -57,7 +60,7 @@ def daily_report():
             # Try to get account from accounts list as fallback
             try:
                 logger.info(f"Attempting to get account from accounts list...")
-                accounts_response = schwab_api_request("GET", ORDERS_ACCOUNTS_URL, access_token)
+                accounts_response = schwab_api_request("GET", SCHWAB_ACCOUNTS_URL, access_token)
                 accounts = accounts_response.json()
                 
                 # Handle both dict and list responses

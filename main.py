@@ -21,6 +21,14 @@ load_dotenv()
 # Initialize logger
 logger = setup_logger("main")
 
+# Initialize database
+try:
+    from utils.database import init_database
+    init_database()
+    logger.info("Database initialized")
+except Exception as e:
+    logger.warning(f"Database initialization failed: {e}")
+
 # Create Flask app
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')

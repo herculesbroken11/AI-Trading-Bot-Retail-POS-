@@ -236,6 +236,82 @@
                 </tbody>
             </table>
         </div>
+        
+        <div class="grid" style="margin-top: 20px;">
+            <div class="card" style="grid-column: 1 / -1;">
+                <h2>Daily Report & Audit</h2>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-top: 15px;">
+                    <div class="metric">
+                        <span class="metric-label">Total Trades Today:</span>
+                        <span class="metric-value" id="totalTrades">-</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Win Rate:</span>
+                        <span class="metric-value" id="winRate">-</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Account Value:</span>
+                        <span class="metric-value" id="accountValue">-</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Buying Power:</span>
+                        <span class="metric-value" id="buyingPower">-</span>
+                    </div>
+                </div>
+                <div style="margin-top: 20px;">
+                    <button class="btn" onclick="loadDailyReport()">Refresh Report</button>
+                    <button class="btn" onclick="loadComplianceReport()">View Compliance</button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card" style="margin-top: 20px;">
+            <h2>Today's Trades</h2>
+            <table class="positions-table">
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Symbol</th>
+                        <th>Action</th>
+                        <th>Quantity</th>
+                        <th>Price</th>
+                        <th>Setup</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody id="tradesTable">
+                    <tr>
+                        <td colspan="7" style="text-align: center; padding: 20px;">Loading...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="card" style="margin-top: 20px;">
+            <h2>Compliance & Audit Metrics</h2>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-top: 15px;">
+                <div class="metric">
+                    <span class="metric-label">Total Volume:</span>
+                    <span class="metric-value" id="totalVolume">-</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Avg Trade Size:</span>
+                    <span class="metric-value" id="avgTradeSize">-</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Max Trade Size:</span>
+                    <span class="metric-value" id="maxTradeSize">-</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Risk Per Trade:</span>
+                    <span class="metric-value" id="riskPerTrade">-</span>
+                </div>
+            </div>
+            <div id="aiReport" style="margin-top: 20px; padding: 15px; background: #2a2f4a; border-radius: 5px; display: none;">
+                <h3 style="color: #667eea; margin-bottom: 10px;">AI Analysis</h3>
+                <div id="aiReportContent" style="color: #e0e0e0; white-space: pre-wrap;"></div>
+            </div>
+        </div>
     </div>
     
     <script>
@@ -251,10 +327,96 @@
             }
         }
         
+        let currentAccountId = null;
+        
         async function refreshAll() {
             await updateAutomationStatus();
             await updatePositions();
+            await loadDailyReport();
+            await loadComplianceReport();
             document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+        }
+        
+        async function getAccountId() {
+            if (currentAccountId) return currentAccountId;
+            
+            const accounts = await fetchJSON(`${API_BASE}/orders/accounts`);
+            if (accounts && accounts.length > 0) {
+                const account = accounts[0];
+                currentAccountId = account.securitiesAccount?.accountNumber || account.accountNumber || null;
+            }
+            return currentAccountId;
+        }
+        
+        async function loadDailyReport() {
+            const accountId = await getAccountId();
+            if (!accountId) {
+                document.getElementById('totalTrades').textContent = 'N/A';
+                document.getElementById('winRate').textContent = 'N/A';
+                document.getElementById('accountValue').textContent = 'N/A';
+                document.getElementById('buyingPower').textContent = 'N/A';
+                return;
+            }
+            
+            const data = await fetchJSON(`${API_BASE}/reports/daily?accountId=${accountId}`);
+            if (data) {
+                const pnl = data.pnl || {};
+                document.getElementById('totalTrades').textContent = pnl.total_trades || 0;
+                document.getElementById('winRate').textContent = pnl.win_rate ? `${pnl.win_rate.toFixed(1)}%` : '0%';
+                document.getElementById('accountValue').textContent = pnl.account_value ? `$${parseFloat(pnl.account_value).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '-';
+                document.getElementById('buyingPower').textContent = pnl.buying_power ? `$${parseFloat(pnl.buying_power).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '-';
+                
+                // Update today's trades count
+                document.getElementById('todayTrades').textContent = pnl.total_trades || 0;
+                
+                // Update P&L today
+                const pnlToday = pnl.estimated_pnl || 0;
+                const pnlElement = document.getElementById('pnlToday');
+                pnlElement.textContent = pnlToday ? `$${parseFloat(pnlToday).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '-';
+                pnlElement.className = 'metric-value ' + (pnlToday >= 0 ? 'positive' : 'negative');
+                
+                // Display trades
+                if (data.trades && data.trades.length > 0) {
+                    const tbody = document.getElementById('tradesTable');
+                    tbody.innerHTML = data.trades.map(trade => {
+                        const timestamp = new Date(trade.timestamp || trade.timestamp);
+                        const timeStr = timestamp.toLocaleTimeString();
+                        return `
+                            <tr>
+                                <td>${timeStr}</td>
+                                <td>${trade.symbol || '-'}</td>
+                                <td>${trade.action || '-'}</td>
+                                <td>${trade.quantity || '-'}</td>
+                                <td>$${trade.price ? parseFloat(trade.price).toFixed(2) : '-'}</td>
+                                <td>${trade.setup_type || '-'}</td>
+                                <td>${trade.status || '-'}</td>
+                            </tr>
+                        `;
+                    }).join('');
+                } else {
+                    document.getElementById('tradesTable').innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 20px;">No trades today</td></tr>';
+                }
+                
+                // Display AI report if available
+                if (data.ai_report) {
+                    document.getElementById('aiReport').style.display = 'block';
+                    document.getElementById('aiReportContent').textContent = data.ai_report;
+                } else {
+                    document.getElementById('aiReport').style.display = 'none';
+                }
+            }
+        }
+        
+        async function loadComplianceReport() {
+            const today = new Date().toISOString().split('T')[0];
+            const data = await fetchJSON(`${API_BASE}/reports/compliance?start_date=${today}&end_date=${today}`);
+            if (data && data.metrics) {
+                const metrics = data.metrics;
+                document.getElementById('totalVolume').textContent = metrics.total_volume || 0;
+                document.getElementById('avgTradeSize').textContent = metrics.average_trade_size ? metrics.average_trade_size.toFixed(0) : 0;
+                document.getElementById('maxTradeSize').textContent = metrics.max_trade_size || 0;
+                document.getElementById('riskPerTrade').textContent = metrics.risk_per_trade || '$300';
+            }
         }
         
         async function updateAutomationStatus() {

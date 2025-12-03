@@ -8,7 +8,13 @@ from pathlib import Path
 import pandas as pd
 import csv
 from utils.logger import setup_logger
-from utils.helpers import load_tokens, schwab_api_request
+from utils.helpers import load_tokens, schwab_api_request, get_valid_access_token
+from utils.database import (
+    get_trades_from_db, 
+    get_todays_trades_from_db,
+    get_trade_statistics,
+    init_database
+)
 from ai.analyze import TradingAIAnalyzer
 
 reports_bp = Blueprint('reports', __name__, url_prefix='/reports')
@@ -31,13 +37,30 @@ def daily_report():
         return jsonify({"error": "accountId required"}), 400
     
     try:
+        access_token = get_valid_access_token()
+        if not access_token:
+            return jsonify({"error": "Not authenticated"}), 401
+        
         # Get account information
-        url = f"{SCHWAB_ACCOUNTS_URL}/{account_id}"
-        response = schwab_api_request("GET", url, tokens['access_token'])
+        from api.orders import get_account_hash_value
+        try:
+            account_hash = get_account_hash_value(account_id, access_token)
+        except:
+            account_hash = account_id
+        
+        url = f"{SCHWAB_ACCOUNTS_URL}/{account_hash}"
+        response = schwab_api_request("GET", url, access_token)
         account_data = response.json()
         
-        # Get today's trades from CSV
-        trades = get_todays_trades()
+        # Get today's trades from database (preferred) or CSV (fallback)
+        try:
+            trades = get_todays_trades_from_db(account_id=account_id)
+            if not trades:
+                # Fallback to CSV if database is empty
+                trades = get_todays_trades()
+        except Exception as e:
+            logger.warning(f"Database query failed, using CSV: {e}")
+            trades = get_todays_trades()
         
         # Calculate P&L
         pnl_data = calculate_daily_pnl(trades, account_data)
@@ -81,8 +104,15 @@ def compliance_report():
     end_date = request.args.get('end_date', date.today().isoformat())
     
     try:
-        # Load trades from CSV
-        trades = load_trades_from_csv(start_date, end_date)
+        # Load trades from database (preferred) or CSV (fallback)
+        try:
+            trades = get_trades_from_db(start_date=start_date, end_date=end_date)
+            if not trades:
+                # Fallback to CSV if database is empty
+                trades = load_trades_from_csv(start_date, end_date)
+        except Exception as e:
+            logger.warning(f"Database query failed, using CSV: {e}")
+            trades = load_trades_from_csv(start_date, end_date)
         
         # Calculate compliance metrics
         metrics = calculate_compliance_metrics(trades)
@@ -103,13 +133,24 @@ def compliance_report():
 @reports_bp.route('/trades', methods=['GET'])
 def get_trades():
     """
-    Get trades from CSV file.
+    Get trades from database or CSV file.
     """
     start_date = request.args.get('start_date')
     end_date = request.args.get('end_date')
+    symbol = request.args.get('symbol')
+    account_id = request.args.get('accountId')
     
     try:
-        trades = load_trades_from_csv(start_date, end_date)
+        # Try database first, fallback to CSV
+        try:
+            trades = get_trades_from_db(start_date=start_date, end_date=end_date, 
+                                       symbol=symbol, account_id=account_id)
+            if not trades:
+                trades = load_trades_from_csv(start_date, end_date)
+        except Exception as e:
+            logger.warning(f"Database query failed, using CSV: {e}")
+            trades = load_trades_from_csv(start_date, end_date)
+        
         return jsonify({
             "count": len(trades),
             "trades": trades
@@ -166,18 +207,29 @@ def load_trades_from_csv(start_date: str = None, end_date: str = None) -> list:
 def calculate_daily_pnl(trades: list, account_data: dict) -> dict:
     """Calculate daily P&L from trades."""
     total_trades = len(trades)
-    winning_trades = 0
-    losing_trades = 0
-    total_pnl = 0.0
     
-    # This is simplified - actual P&L should come from account positions
-    for trade in trades:
-        # Calculate P&L based on entry, current price, and stop/target
-        # This is a placeholder - real implementation needs position data
-        pass
+    # Try to get statistics from database if available
+    try:
+        stats = get_trade_statistics()
+        winning_trades = stats.get("winning_trades", 0)
+        losing_trades = stats.get("losing_trades", 0)
+        win_rate = stats.get("win_rate", 0)
+    except:
+        # Fallback: calculate from trades list
+        winning_trades = sum(1 for t in trades if t.get("pnl", 0) > 0)
+        losing_trades = sum(1 for t in trades if t.get("pnl", 0) < 0)
+        win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+    
+    # Calculate total P&L from trades
+    total_pnl = sum(float(t.get("pnl", 0)) for t in trades if t.get("pnl"))
     
     # Get account P&L from account data if available
-    current_balances = account_data.get("currentBalances", {})
+    # Handle both dict and list responses from Schwab API
+    if isinstance(account_data, list) and len(account_data) > 0:
+        account_data = account_data[0]
+    
+    securities_account = account_data.get("securitiesAccount", account_data)
+    current_balances = securities_account.get("currentBalances", {})
     day_trading_buying_power = current_balances.get("dayTradingBuyingPower", 0)
     liquidation_value = current_balances.get("liquidationValue", 0)
     
@@ -185,7 +237,7 @@ def calculate_daily_pnl(trades: list, account_data: dict) -> dict:
         "total_trades": total_trades,
         "winning_trades": winning_trades,
         "losing_trades": losing_trades,
-        "win_rate": (winning_trades / total_trades * 100) if total_trades > 0 else 0,
+        "win_rate": win_rate,
         "estimated_pnl": total_pnl,
         "account_value": liquidation_value,
         "buying_power": day_trading_buying_power

@@ -199,8 +199,8 @@ def place_order():
         except:
             order_response = {}
         
-        # Log trade to CSV
-        log_trade(data, order_response if order_response else {"status": "PLACED", "location": location})
+        # Log trade to CSV and database
+        log_trade(data, order_response if order_response else {"status": "PLACED", "location": location}, None, account_id)
         
         return jsonify({
             "message": "Order placed successfully",
@@ -287,8 +287,8 @@ def execute_signal_helper(signal: dict, access_token: str) -> dict:
     
     logger.info(f"Signal executed: {signal['symbol']} {signal['action']} @ {signal['entry']} (Location: {location})")
     
-    # Log trade
-    log_trade(order_data, order_response if order_response else {"status": "PLACED", "location": location}, signal)
+    # Log trade to CSV and database
+    log_trade(order_data, order_response if order_response else {"status": "PLACED", "location": location}, signal, account_id)
     
     return {
         "status": "success",
@@ -1011,18 +1011,21 @@ def is_market_open() -> bool:
     # Simple check (should account for timezone and holidays)
     return market_open <= current_time <= market_close
 
-def log_trade(order_data: dict, order_response: dict, signal: dict = None):
+def log_trade(order_data: dict, order_response: dict, signal: dict = None, account_id: str = None):
     """
-    Log trade to CSV file.
+    Log trade to both CSV file and SQLite database.
     
     Args:
         order_data: Order data
         order_response: Order response from API
         signal: Optional signal data
+        account_id: Optional account ID
     """
     from pathlib import Path
     import csv
+    from utils.database import log_trade_to_db
     
+    # Log to CSV (for backward compatibility)
     csv_path = Path("data/trades.csv")
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     
@@ -1054,7 +1057,13 @@ def log_trade(order_data: dict, order_response: dict, signal: dict = None):
             signal.get("target") if signal else None
         ])
     
-    logger.info(f"Trade logged to {csv_path}")
+    # Log to SQLite database
+    try:
+        log_trade_to_db(order_data, order_response, signal, account_id)
+    except Exception as e:
+        logger.warning(f"Failed to log trade to database (CSV logged successfully): {e}")
+    
+    logger.info(f"Trade logged to {csv_path} and database")
 
 # ============================================================================
 # Transactions Endpoints

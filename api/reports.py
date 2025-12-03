@@ -70,7 +70,16 @@ def daily_report():
         if trades:
             try:
                 analyzer = TradingAIAnalyzer()
-                account_value = float(account_data.get("currentBalances", {}).get("liquidationValue", 0))
+                # Get account value safely
+                account_value = 0
+                try:
+                    if isinstance(account_data, list) and len(account_data) > 0:
+                        account_data = account_data[0]
+                    securities_account = account_data.get("securitiesAccount", account_data) if isinstance(account_data, dict) else {}
+                    current_balances = securities_account.get("currentBalances", {}) if isinstance(securities_account, dict) else {}
+                    account_value = float(current_balances.get("liquidationValue", 0) or 0) if isinstance(current_balances, dict) else 0
+                except:
+                    pass
                 ai_report = analyzer.generate_daily_report(trades, account_value)
             except Exception as e:
                 logger.warning(f"AI report generation failed: {e}")
@@ -88,8 +97,23 @@ def daily_report():
         }), 200
         
     except Exception as e:
-        logger.error(f"Failed to generate daily report: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Failed to generate daily report: {e}", exc_info=True)
+        return jsonify({
+            "error": "Failed to generate daily report",
+            "details": str(e),
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "account_id": account_id,
+            "pnl": {
+                "total_trades": 0,
+                "winning_trades": 0,
+                "losing_trades": 0,
+                "win_rate": 0,
+                "estimated_pnl": 0,
+                "account_value": 0,
+                "buying_power": 0
+            },
+            "trades": []
+        }), 500
 
 @reports_bp.route('/compliance', methods=['GET'])
 def compliance_report():
@@ -214,24 +238,44 @@ def calculate_daily_pnl(trades: list, account_data: dict) -> dict:
         winning_trades = stats.get("winning_trades", 0)
         losing_trades = stats.get("losing_trades", 0)
         win_rate = stats.get("win_rate", 0)
-    except:
+    except Exception as e:
+        logger.debug(f"Could not get statistics from database: {e}")
         # Fallback: calculate from trades list
-        winning_trades = sum(1 for t in trades if t.get("pnl", 0) > 0)
-        losing_trades = sum(1 for t in trades if t.get("pnl", 0) < 0)
+        winning_trades = sum(1 for t in trades if t.get("pnl") and float(t.get("pnl", 0)) > 0)
+        losing_trades = sum(1 for t in trades if t.get("pnl") and float(t.get("pnl", 0)) < 0)
         win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
     
     # Calculate total P&L from trades
-    total_pnl = sum(float(t.get("pnl", 0)) for t in trades if t.get("pnl"))
+    total_pnl = 0.0
+    for t in trades:
+        try:
+            pnl = t.get("pnl")
+            if pnl:
+                total_pnl += float(pnl)
+        except (ValueError, TypeError):
+            pass
     
     # Get account P&L from account data if available
     # Handle both dict and list responses from Schwab API
-    if isinstance(account_data, list) and len(account_data) > 0:
-        account_data = account_data[0]
+    liquidation_value = 0
+    day_trading_buying_power = 0
     
-    securities_account = account_data.get("securitiesAccount", account_data)
-    current_balances = securities_account.get("currentBalances", {})
-    day_trading_buying_power = current_balances.get("dayTradingBuyingPower", 0)
-    liquidation_value = current_balances.get("liquidationValue", 0)
+    try:
+        if isinstance(account_data, list) and len(account_data) > 0:
+            account_data = account_data[0]
+        
+        if isinstance(account_data, dict):
+            # Try different possible structures
+            securities_account = account_data.get("securitiesAccount", account_data)
+            
+            if isinstance(securities_account, dict):
+                current_balances = securities_account.get("currentBalances", {})
+                if isinstance(current_balances, dict):
+                    liquidation_value = float(current_balances.get("liquidationValue", 0) or 0)
+                    day_trading_buying_power = float(current_balances.get("dayTradingBuyingPower", 0) or 0)
+    except Exception as e:
+        logger.warning(f"Could not parse account data: {e}")
+        # Use defaults (0) if parsing fails
     
     return {
         "total_trades": total_trades,

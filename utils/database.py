@@ -122,6 +122,9 @@ def get_trades_from_db(start_date: Optional[str] = None, end_date: Optional[str]
         List of trade dictionaries
     """
     try:
+        # Ensure database is initialized
+        init_database()
+        
         conn = get_db_connection()
         cursor = conn.cursor()
         
@@ -163,8 +166,12 @@ def get_trades_from_db(start_date: Optional[str] = None, end_date: Optional[str]
 
 def get_todays_trades_from_db(account_id: Optional[str] = None) -> List[Dict]:
     """Get all trades executed today."""
-    today = datetime.now().date().isoformat()
-    return get_trades_from_db(start_date=today, end_date=today, account_id=account_id)
+    try:
+        today = datetime.now().date().isoformat()
+        return get_trades_from_db(start_date=today, end_date=today, account_id=account_id)
+    except Exception as e:
+        logger.error(f"Failed to get today's trades from database: {e}")
+        return []
 
 def update_trade_pnl(trade_id: int, pnl: float):
     """Update P&L for a trade."""
@@ -190,6 +197,9 @@ def get_trade_statistics(start_date: Optional[str] = None, end_date: Optional[st
         Dictionary with statistics
     """
     try:
+        # Ensure database is initialized
+        init_database()
+        
         conn = get_db_connection()
         cursor = conn.cursor()
         
@@ -236,7 +246,7 @@ def get_trade_statistics(start_date: Optional[str] = None, end_date: Optional[st
             "max_trade_size": max_size
         }
     except Exception as e:
-        logger.error(f"Failed to get trade statistics: {e}")
+        logger.error(f"Failed to get trade statistics: {e}", exc_info=True)
         return {
             "total_trades": 0,
             "total_volume": 0,

@@ -82,60 +82,81 @@ def daily_report():
             return jsonify({"error": "Not authenticated. Please authenticate with Schwab first."}), 401
         
         # Get account information - must use encrypted hash value
-        from api.orders import SCHWAB_ACCOUNT_NUMBERS_URL
+        from api.orders import SCHWAB_ACCOUNTS_URL, SCHWAB_ACCOUNT_NUMBERS_URL, get_account_hash_value
         
-        # STEP 1: Get all available account numbers first
-        logger.info(f"Step 1: Getting all account numbers from Schwab API...")
+        account_id_str = str(account_id).strip()
+        
+        # STEP 1: Verify account exists using the working /accounts endpoint
+        logger.info(f"Step 1: Verifying account '{account_id_str}' exists using /accounts endpoint...")
         try:
-            account_numbers_response = schwab_api_request("GET", SCHWAB_ACCOUNT_NUMBERS_URL, access_token)
-            all_account_numbers = account_numbers_response.json()
-            if isinstance(all_account_numbers, dict):
-                all_account_numbers = [all_account_numbers]
+            accounts_response = schwab_api_request("GET", SCHWAB_ACCOUNTS_URL, access_token)
+            all_accounts = accounts_response.json()
+            if isinstance(all_accounts, dict):
+                all_accounts = [all_accounts]
             
-            # Extract account numbers and hash values
-            available_accounts = []
-            account_hash_map = {}
-            for acc in all_account_numbers:
-                acc_num = str(acc.get("accountNumber", "")).strip()
-                hash_val = str(acc.get("hashValue", "")).strip()
-                if acc_num and hash_val:
-                    available_accounts.append(acc_num)
-                    account_hash_map[acc_num] = hash_val
-                    logger.info(f"  Found account: {acc_num} -> hash: {hash_val[:30]}...")
+            # Extract account numbers from accounts list
+            found_account = None
+            available_account_numbers = []
+            for acc in all_accounts:
+                sec_account = acc.get("securitiesAccount", acc)
+                acc_num = str(sec_account.get("accountNumber", "")).strip()
+                if acc_num:
+                    available_account_numbers.append(acc_num)
+                    if acc_num == account_id_str:
+                        found_account = acc
+                        logger.info(f"✓ Account '{account_id_str}' found in accounts list!")
             
-            logger.info(f"Total available accounts: {len(available_accounts)}")
-            logger.info(f"Looking for account: '{account_id}' in available accounts: {available_accounts}")
+            if not found_account:
+                logger.error(f"❌ Account '{account_id_str}' NOT FOUND in accounts!")
+                return jsonify({
+                    "error": "Account number not found",
+                    "account_id_provided": account_id_str,
+                    "available_accounts": available_account_numbers,
+                    "suggestion": f"The account number '{account_id_str}' is not in your account list. Available accounts: {available_account_numbers}. Please use one of these account numbers."
+                }), 400
             
         except Exception as e:
-            logger.error(f"Failed to get account numbers: {e}", exc_info=True)
+            logger.error(f"Failed to verify account: {e}", exc_info=True)
             return jsonify({
-                "error": "Failed to retrieve account numbers from Schwab API",
+                "error": "Failed to retrieve accounts from Schwab API",
                 "details": str(e),
-                "account_id_provided": account_id,
+                "account_id_provided": account_id_str,
                 "suggestion": "Please verify your authentication and try again."
             }), 500
         
-        # STEP 2: Check if account exists in the list
-        account_id_str = str(account_id).strip()
-        if account_id_str not in available_accounts:
-            logger.error(f"❌ Account '{account_id_str}' NOT FOUND in available accounts!")
-            return jsonify({
-                "error": "Account number not found",
-                "account_id_provided": account_id_str,
-                "available_accounts": available_accounts,
-                "suggestion": f"The account number '{account_id_str}' is not in your account list. Available accounts: {available_accounts}. Please use one of these account numbers."
-            }), 400
-        
-        # STEP 3: Get hash value for the account
-        account_hash = account_hash_map.get(account_id_str)
+        # STEP 2: Get hash value using the accountNumbers endpoint
+        logger.info(f"Step 2: Getting hash value for account '{account_id_str}'...")
+        account_hash = None
+        try:
+            account_hash = get_account_hash_value(account_id_str, access_token)
+            logger.info(f"✓ Got hash value: {account_hash[:30]}...")
+        except Exception as hash_error:
+            logger.error(f"❌ Failed to get hash value: {hash_error}", exc_info=True)
+            # Try to get hash from accountNumbers endpoint directly
+            try:
+                logger.info(f"Attempting direct call to accountNumbers endpoint...")
+                account_numbers_response = schwab_api_request("GET", SCHWAB_ACCOUNT_NUMBERS_URL, access_token)
+                account_numbers = account_numbers_response.json()
+                if isinstance(account_numbers, dict):
+                    account_numbers = [account_numbers]
+                
+                for acc in account_numbers:
+                    acc_num = str(acc.get("accountNumber", "")).strip()
+                    hash_val = str(acc.get("hashValue", "")).strip()
+                    if acc_num == account_id_str and hash_val:
+                        account_hash = hash_val
+                        logger.info(f"✓ Found hash via direct call: {account_hash[:30]}...")
+                        break
+            except Exception as direct_error:
+                logger.error(f"Direct hash lookup also failed: {direct_error}")
         
         if not account_hash:
             logger.error(f"❌ No hash value found for account '{account_id_str}'")
             return jsonify({
                 "error": "Hash value not found for account",
                 "account_id_provided": account_id_str,
-                "available_accounts": available_accounts,
-                "suggestion": "The account exists but hash value is missing. Please try again or contact support."
+                "available_accounts": available_account_numbers,
+                "suggestion": "The account exists but hash value could not be retrieved. Please check server logs or try again."
             }), 500
         
         # STEP 4: Validate hash value
@@ -159,11 +180,28 @@ def daily_report():
         
         logger.info(f"✓ Account '{account_id_str}' found! Hash: {account_hash[:30]}...")
         
+        # FINAL SAFETY CHECK - This should NEVER happen
+        if account_hash == account_id_str or str(account_hash) == str(account_id_str):
+            logger.error(f"❌ CRITICAL BUG DETECTED: Hash equals account ID!")
+            logger.error(f"  account_hash: '{account_hash}' (type: {type(account_hash)})")
+            logger.error(f"  account_id_str: '{account_id_str}' (type: {type(account_id_str)})")
+            return jsonify({
+                "error": "CRITICAL: Hash validation failed",
+                "details": f"Account hash ({account_hash}) equals account ID ({account_id_str})",
+                "account_id_provided": account_id_str,
+                "suggestion": "This is a critical bug. The system attempted to use plain account number. Please check server logs and contact support."
+            }), 500
+        
         # Build URL with validated hash (already validated in STEP 4 above)
         url = f"{SCHWAB_ACCOUNTS_URL}/{account_hash}"
         logger.info(f"✓ Making request to Schwab API: {url}")
         logger.info(f"  Account ID: {account_id_str}")
         logger.info(f"  Account Hash: {account_hash[:50]}... (length: {len(account_hash)})")
+        logger.info(f"  Hash != Account ID: {account_hash != account_id_str}")
+        
+        # ABSOLUTE FINAL CHECK before API call
+        assert account_hash != account_id_str, f"BUG: account_hash ({account_hash}) == account_id ({account_id_str})"
+        assert len(account_hash) >= 20, f"BUG: account_hash too short: {account_hash}"
         
         try:
             response = schwab_api_request("GET", url, access_token)

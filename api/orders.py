@@ -28,6 +28,97 @@ SCHWAB_USER_PREF_URL = f"{SCHWAB_BASE_URL}/trader/v1/userPreference"
 # Cache for account number to hash value mapping
 _account_hash_cache = {}
 
+def get_validated_account_hash(account_id: str, access_token: str) -> tuple[str, list[str]]:
+    """
+    Get and validate account hash value, ensuring account exists.
+    This function verifies the account exists and returns a valid hash.
+    
+    Args:
+        account_id: Plain text account number
+        access_token: OAuth access token
+        
+    Returns:
+        Tuple of (account_hash, available_account_numbers)
+        
+    Raises:
+        ValueError: If account not found or hash cannot be retrieved
+    """
+    account_id_str = str(account_id).strip()
+    
+    # STEP 1: Verify account exists using /accounts endpoint
+    logger.info(f"Verifying account '{account_id_str}' exists...")
+    try:
+        accounts_response = schwab_api_request("GET", SCHWAB_ACCOUNTS_URL, access_token)
+        all_accounts = accounts_response.json()
+        if isinstance(all_accounts, dict):
+            all_accounts = [all_accounts]
+        
+        found_account = None
+        available_account_numbers = []
+        for acc in all_accounts:
+            sec_account = acc.get("securitiesAccount", acc)
+            acc_num = str(sec_account.get("accountNumber", "")).strip()
+            if acc_num:
+                available_account_numbers.append(acc_num)
+                if acc_num == account_id_str:
+                    found_account = acc
+                    logger.info(f"✓ Account '{account_id_str}' found!")
+        
+        if not found_account:
+            raise ValueError(
+                f"Account number '{account_id_str}' not found. "
+                f"Available accounts: {available_account_numbers}"
+            )
+    except ValueError:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to verify account: {e}", exc_info=True)
+        raise ValueError(f"Failed to retrieve accounts: {str(e)}")
+    
+    # STEP 2: Get hash value
+    logger.info(f"Getting hash value for account '{account_id_str}'...")
+    account_hash = None
+    try:
+        account_hash = get_account_hash_value(account_id_str, access_token)
+        logger.info(f"✓ Got hash value: {account_hash[:30]}...")
+    except Exception as hash_error:
+        logger.error(f"Failed to get hash value: {hash_error}", exc_info=True)
+        # Try direct call to accountNumbers endpoint
+        try:
+            logger.info(f"Attempting direct call to accountNumbers endpoint...")
+            account_numbers_response = schwab_api_request("GET", SCHWAB_ACCOUNT_NUMBERS_URL, access_token)
+            account_numbers = account_numbers_response.json()
+            if isinstance(account_numbers, dict):
+                account_numbers = [account_numbers]
+            
+            for acc in account_numbers:
+                acc_num = str(acc.get("accountNumber", "")).strip()
+                hash_val = str(acc.get("hashValue", "")).strip()
+                if acc_num == account_id_str and hash_val:
+                    account_hash = hash_val
+                    logger.info(f"✓ Found hash via direct call: {account_hash[:30]}...")
+                    break
+        except Exception as direct_error:
+            logger.error(f"Direct hash lookup also failed: {direct_error}")
+            raise ValueError(f"Failed to retrieve hash value: {str(hash_error)}")
+    
+    if not account_hash:
+        raise ValueError(
+            f"Hash value not found for account '{account_id_str}'. "
+            f"Available accounts: {available_account_numbers}"
+        )
+    
+    # STEP 3: Validate hash value
+    if account_hash == account_id_str or str(account_hash) == str(account_id_str):
+        logger.error(f"❌ CRITICAL: Hash equals account ID! hash={account_hash}, account_id={account_id_str}")
+        raise ValueError(f"Invalid hash value: hash equals account ID")
+    
+    if len(account_hash) < 20:
+        logger.error(f"❌ Hash value too short: {account_hash}")
+        raise ValueError(f"Invalid hash value format: hash too short")
+    
+    return account_hash, available_account_numbers
+
 def get_account_hash_value(account_number: str, access_token: str) -> str:
     """
     Get encrypted hash value for an account number.
@@ -206,13 +297,10 @@ def place_order():
         order_payload = build_order_payload(data)
         
         # Place order - Correct URL: /accounts/{accountNumber}/orders
-        # Convert to encrypted hash value
+        # Convert to encrypted hash value - CRITICAL: Must use hash, never plain account number
         account_id = data["accountId"]
-        try:
-            account_hash = get_account_hash_value(account_id, tokens['access_token'])
-        except Exception as e:
-            logger.warning(f"Could not get hash value for {account_id}, trying plain text: {e}")
-            account_hash = account_id
+        account_hash, _ = get_validated_account_hash(account_id, tokens['access_token'])
+        logger.info(f"Using validated hash for account {account_id}: {account_hash[:30]}...")
         url = f"{SCHWAB_ACCOUNTS_URL}/{account_hash}/orders"
         response = schwab_api_request("POST", url, tokens['access_token'], data=order_payload)
         
@@ -300,12 +388,9 @@ def execute_signal_helper(signal: dict, access_token: str) -> dict:
     
     order_payload = build_order_payload(order_data)
     account_id = signal["accountId"]
-    # Convert to encrypted hash value
-    try:
-        account_hash = get_account_hash_value(account_id, access_token)
-    except Exception as e:
-        logger.warning(f"Could not get hash value for {account_id}, trying plain text: {e}")
-        account_hash = account_id
+    # Convert to encrypted hash value - CRITICAL: Must use hash, never plain account number
+    account_hash, _ = get_validated_account_hash(account_id, access_token)
+    logger.info(f"Using validated hash for account {account_id}: {account_hash[:30]}...")
     url = f"{SCHWAB_ACCOUNTS_URL}/{account_hash}/orders"
     response = schwab_api_request("POST", url, access_token, data=order_payload)
     
@@ -584,12 +669,9 @@ def get_all_orders():
     try:
         # If accountId provided, get orders for specific account
         if account_id:
-            # Convert to encrypted hash value
-            try:
-                account_hash = get_account_hash_value(account_id, tokens['access_token'])
-            except Exception as e:
-                logger.warning(f"Could not get hash value for {account_id}, trying plain text: {e}")
-                account_hash = account_id
+            # Convert to encrypted hash value - CRITICAL: Must use hash, never plain account number
+            account_hash, _ = get_validated_account_hash(account_id, tokens['access_token'])
+            logger.info(f"Using validated hash for account {account_id}: {account_hash[:30]}...")
             url = f"{SCHWAB_ACCOUNTS_URL}/{account_hash}/orders"
             # For account-specific orders, date parameters are optional
             params = {}
@@ -653,12 +735,9 @@ def get_order(account_id: str, order_id: str):
         return jsonify({"error": "Not authenticated"}), 401
     
     try:
-        # Convert to encrypted hash value
-        try:
-            account_hash = get_account_hash_value(account_id, tokens['access_token'])
-        except Exception as e:
-            logger.warning(f"Could not get hash value for {account_id}, trying plain text: {e}")
-            account_hash = account_id
+        # Convert to encrypted hash value - CRITICAL: Must use hash, never plain account number
+        account_hash, _ = get_validated_account_hash(account_id, tokens['access_token'])
+        logger.info(f"Using validated hash for account {account_id}: {account_hash[:30]}...")
         url = f"{SCHWAB_ACCOUNTS_URL}/{account_hash}/orders/{order_id}"
         response = schwab_api_request("GET", url, tokens['access_token'])
         data = response.json()
@@ -680,12 +759,9 @@ def cancel_order(account_id: str, order_id: str):
         return jsonify({"error": "Not authenticated"}), 401
     
     try:
-        # Convert to encrypted hash value
-        try:
-            account_hash = get_account_hash_value(account_id, tokens['access_token'])
-        except Exception as e:
-            logger.warning(f"Could not get hash value for {account_id}, trying plain text: {e}")
-            account_hash = account_id
+        # Convert to encrypted hash value - CRITICAL: Must use hash, never plain account number
+        account_hash, _ = get_validated_account_hash(account_id, tokens['access_token'])
+        logger.info(f"Using validated hash for account {account_id}: {account_hash[:30]}...")
         url = f"{SCHWAB_ACCOUNTS_URL}/{account_hash}/orders/{order_id}"
         response = schwab_api_request("DELETE", url, tokens['access_token'])
         
@@ -719,12 +795,9 @@ def replace_order(account_id: str, order_id: str):
         # Build order payload
         order_payload = build_order_payload(data)
         
-        # Convert to encrypted hash value
-        try:
-            account_hash = get_account_hash_value(account_id, tokens['access_token'])
-        except Exception as e:
-            logger.warning(f"Could not get hash value for {account_id}, trying plain text: {e}")
-            account_hash = account_id
+        # Convert to encrypted hash value - CRITICAL: Must use hash, never plain account number
+        account_hash, _ = get_validated_account_hash(account_id, tokens['access_token'])
+        logger.info(f"Using validated hash for account {account_id}: {account_hash[:30]}...")
         url = f"{SCHWAB_ACCOUNTS_URL}/{account_hash}/orders/{order_id}"
         response = schwab_api_request("PUT", url, tokens['access_token'], data=order_payload)
         order_response = response.json()
@@ -765,12 +838,9 @@ def preview_order(account_id: str):
         # Build order payload
         order_payload = build_order_payload(data)
         
-        # Convert to encrypted hash value
-        try:
-            account_hash = get_account_hash_value(account_id, tokens['access_token'])
-        except Exception as e:
-            logger.warning(f"Could not get hash value for {account_id}, trying plain text: {e}")
-            account_hash = account_id
+        # Convert to encrypted hash value - CRITICAL: Must use hash, never plain account number
+        account_hash, _ = get_validated_account_hash(account_id, tokens['access_token'])
+        logger.info(f"Using validated hash for account {account_id}: {account_hash[:30]}...")
         
         # Optional: Pre-check buying power before sending to API
         # This helps provide better error messages
@@ -925,15 +995,10 @@ def get_positions():
         # but the 'positions' field may be missing if there are no open positions
         # The fields=positions parameter may not be needed or may not work at the account-specific endpoint
         
-        # Convert plain text account number to encrypted hash value if needed
+        # Convert plain text account number to encrypted hash value - CRITICAL: Must use hash, never plain account number
         # Schwab API requires encrypted hash values for account-specific endpoints
-        try:
-            account_hash = get_account_hash_value(account_id, tokens['access_token'])
-            logger.info(f"Using encrypted hash value for account {account_id}")
-        except Exception as e:
-            logger.warning(f"Could not get hash value for {account_id}, trying plain text: {e}")
-            # Fallback to plain text (might work for some endpoints)
-            account_hash = account_id
+        account_hash, _ = get_validated_account_hash(account_id, tokens['access_token'])
+        logger.info(f"Using validated hash for account {account_id}: {account_hash[:30]}...")
         
         account_url = f"{SCHWAB_ACCOUNTS_URL}/{account_hash}"
         logger.info(f"Requesting account {account_id} (hash: {account_hash[:20]}...) details to get positions")
@@ -1261,12 +1326,9 @@ def get_transactions(account_id: str):
         }), 400
     
     try:
-        # Convert to encrypted hash value
-        try:
-            account_hash = get_account_hash_value(account_id, tokens['access_token'])
-        except Exception as e:
-            logger.warning(f"Could not get hash value for {account_id}, trying plain text: {e}")
-            account_hash = account_id
+        # Convert to encrypted hash value - CRITICAL: Must use hash, never plain account number
+        account_hash, _ = get_validated_account_hash(account_id, tokens['access_token'])
+        logger.info(f"Using validated hash for account {account_id}: {account_hash[:30]}...")
         url = f"{SCHWAB_TRANSACTIONS_URL}/{account_hash}/transactions"
         
         params = {
@@ -1303,12 +1365,9 @@ def get_transaction(account_id: str, transaction_id: str):
         return jsonify({"error": "Not authenticated"}), 401
     
     try:
-        # Convert to encrypted hash value
-        try:
-            account_hash = get_account_hash_value(account_id, tokens['access_token'])
-        except Exception as e:
-            logger.warning(f"Could not get hash value for {account_id}, trying plain text: {e}")
-            account_hash = account_id
+        # Convert to encrypted hash value - CRITICAL: Must use hash, never plain account number
+        account_hash, _ = get_validated_account_hash(account_id, tokens['access_token'])
+        logger.info(f"Using validated hash for account {account_id}: {account_hash[:30]}...")
         url = f"{SCHWAB_TRANSACTIONS_URL}/{account_hash}/transactions/{transaction_id}"
         response = schwab_api_request("GET", url, tokens['access_token'])
         data = response.json()

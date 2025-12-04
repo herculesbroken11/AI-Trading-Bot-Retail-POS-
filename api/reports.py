@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 import csv
 from utils.logger import setup_logger
-from utils.helpers import load_tokens, schwab_api_request, get_valid_access_token
+from utils.helpers import schwab_api_request, get_valid_access_token
 from utils.database import (
     get_trades_from_db, 
     get_todays_trades_from_db,
@@ -68,10 +68,6 @@ def daily_report():
     """
     Generate daily P&L and trading report.
     """
-    tokens = load_tokens()
-    if not tokens or 'access_token' not in tokens:
-        return jsonify({"error": "Not authenticated"}), 401
-    
     account_id = request.args.get('accountId')
     if not account_id:
         return jsonify({"error": "accountId required"}), 400
@@ -80,9 +76,10 @@ def daily_report():
     account_id = str(account_id).strip()
     
     try:
+        # get_valid_access_token() handles authentication and auto-refresh
         access_token = get_valid_access_token()
         if not access_token:
-            return jsonify({"error": "Not authenticated"}), 401
+            return jsonify({"error": "Not authenticated. Please authenticate with Schwab first."}), 401
         
         # Get account information - must use encrypted hash value
         from api.orders import get_account_hash_value, SCHWAB_ACCOUNT_NUMBERS_URL
@@ -328,14 +325,14 @@ def compliance_report():
     """
     Generate compliance report with trade statistics.
     """
-    tokens = load_tokens()
-    if not tokens or 'access_token' not in tokens:
-        return jsonify({"error": "Not authenticated"}), 401
-    
     start_date = request.args.get('start_date', date.today().isoformat())
     end_date = request.args.get('end_date', date.today().isoformat())
     
     try:
+        # get_valid_access_token() handles authentication and auto-refresh
+        access_token = get_valid_access_token()
+        if not access_token:
+            return jsonify({"error": "Not authenticated. Please authenticate with Schwab first."}), 401
         # Load trades from database (preferred) or CSV (fallback)
         try:
             trades = get_trades_from_db(start_date=start_date, end_date=end_date)

@@ -1,0 +1,31 @@
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 10px;
+}
+
+.data-table th,
+.data-table td {
+  padding: 12px;
+  text-align: left;
+  border-bottom: 1px solid #2a2f4a;
+}
+
+.data-table th {
+  background: #2a2f4a;
+  color: #667eea;
+  font-weight: bold;
+}
+
+.data-table tr:hover {
+  background: #2a2f4a;
+}
+
+.data-table .positive {
+  color: #10b981;
+}
+
+.data-table .negative {
+  color: #ef4444;
+}
+

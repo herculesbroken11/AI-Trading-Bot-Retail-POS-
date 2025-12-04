@@ -91,9 +91,14 @@ def trading_signal():
 from flask import send_from_directory
 
 @app.route('/dashboard')
-def dashboard():
-    """Serve dashboard HTML."""
-    return send_from_directory('static', 'dashboard.html')
+@app.route('/dashboard/<path:path>')
+def dashboard(path='index.html'):
+    """Serve React dashboard."""
+    try:
+        return send_from_directory('static/dashboard', path)
+    except:
+        # Fallback to index.html for React Router
+        return send_from_directory('static/dashboard', 'index.html')
 
 if __name__ == '__main__':
     port = int(os.getenv('FLASK_PORT', 5035))

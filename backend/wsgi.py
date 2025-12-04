@@ -1,11 +1,23 @@
 """
 WSGI entry point for Gunicorn production server.
+Run from backend directory: gunicorn wsgi:application
 """
 import os
+import sys
+from pathlib import Path
 from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+# Load environment variables from backend directory
+backend_dir = Path(__file__).parent
+env_path = backend_dir / '.env'
+if env_path.exists():
+    load_dotenv(env_path)
+else:
+    load_dotenv()
+
+# Ensure backend directory is in Python path
+if str(backend_dir) not in sys.path:
+    sys.path.insert(0, str(backend_dir))
 
 # Import the Flask app from main.py
 from main import app

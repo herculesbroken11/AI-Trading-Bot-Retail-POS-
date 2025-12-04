@@ -16,11 +16,11 @@ source venv/bin/activate
 # Install dependencies if needed
 if [ ! -f "venv/lib/python*/site-packages/flask/__init__.py" ]; then
     echo "Installing dependencies..."
-    pip install -r requirements.txt
+    pip install -r backend/requirements.txt
 fi
 
 # Check for .env file
-if [ ! -f ".env" ]; then
+if [ ! -f "backend/.env" ]; then
     echo "WARNING: .env file not found!"
     echo "Please copy .env.example to .env and configure your credentials."
     exit 1
@@ -29,5 +29,6 @@ fi
 # Start Flask server
 echo "Starting Flask server on port 5035..."
 echo
+cd backend
 python main.py
 

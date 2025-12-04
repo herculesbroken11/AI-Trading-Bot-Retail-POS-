@@ -15,7 +15,7 @@ npm run dev
 npm run build
 ```
 
-The build output will be in `../static/dashboard/` and served by Flask.
+The build output will be in `dist/` directory and served by Flask from `http://localhost:5035/dashboard`.
 
 ## Structure
 

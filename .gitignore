@@ -37,6 +37,7 @@ frontend/dist/
 frontend/.vite/
 
 # Build output
+frontend/dist/
 backend/static/dashboard/
 
 # Logs

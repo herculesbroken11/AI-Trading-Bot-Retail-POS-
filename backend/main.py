@@ -93,12 +93,20 @@ from flask import send_from_directory
 @app.route('/dashboard')
 @app.route('/dashboard/<path:path>')
 def dashboard(path='index.html'):
-    """Serve React dashboard."""
+    """Serve React dashboard from frontend/dist."""
+    import os
+    from pathlib import Path
+    
+    # Get the project root directory (parent of backend)
+    backend_dir = Path(__file__).parent
+    project_root = backend_dir.parent
+    frontend_dist = project_root / 'frontend' / 'dist'
+    
     try:
-        return send_from_directory('static/dashboard', path)
+        return send_from_directory(str(frontend_dist), path)
     except:
         # Fallback to index.html for React Router
-        return send_from_directory('static/dashboard', 'index.html')
+        return send_from_directory(str(frontend_dist), 'index.html')
 
 if __name__ == '__main__':
     port = int(os.getenv('FLASK_PORT', 5035))

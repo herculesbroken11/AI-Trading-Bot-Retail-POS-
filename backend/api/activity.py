@@ -66,7 +66,8 @@ def get_rules_status():
     Get current status of OV trading rules.
     """
     try:
-        global scheduler
+        # Import scheduler from automation module
+        from api.automation import scheduler
         
         is_running = scheduler and scheduler.is_running if scheduler else False
         is_market_hours = scheduler.is_market_hours() if scheduler else False

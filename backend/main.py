@@ -96,17 +96,47 @@ def dashboard(path='index.html'):
     """Serve React dashboard from frontend/dist."""
     import os
     from pathlib import Path
+    from flask import abort
     
     # Get the project root directory (parent of backend)
-    backend_dir = Path(__file__).parent
-    project_root = backend_dir.parent
+    backend_dir = Path(__file__).parent.absolute()
+    project_root = backend_dir.parent.absolute()
     frontend_dist = project_root / 'frontend' / 'dist'
     
+    # Convert to absolute path string
+    dist_path = str(frontend_dist)
+    
+    # Check if directory exists
+    if not os.path.exists(dist_path):
+        logger.error(f"Dashboard directory not found: {dist_path}")
+        logger.error(f"Backend dir: {backend_dir}")
+        logger.error(f"Project root: {project_root}")
+        return jsonify({
+            "error": "Dashboard not found",
+            "path": dist_path,
+            "message": "Frontend build not found. Please run 'npm run build' in frontend directory."
+        }), 404
+    
+    # Check if file exists
+    file_path = os.path.join(dist_path, path)
+    if not os.path.exists(file_path) and path != 'index.html':
+        # For React Router - serve index.html for all routes
+        path = 'index.html'
+    
     try:
-        return send_from_directory(str(frontend_dist), path)
-    except:
-        # Fallback to index.html for React Router
-        return send_from_directory(str(frontend_dist), 'index.html')
+        return send_from_directory(dist_path, path)
+    except Exception as e:
+        logger.error(f"Error serving dashboard file: {e}", exc_info=True)
+        # Fallback to index.html
+        try:
+            return send_from_directory(dist_path, 'index.html')
+        except Exception as e2:
+            logger.error(f"Error serving index.html: {e2}", exc_info=True)
+            return jsonify({
+                "error": "Dashboard error",
+                "message": str(e2),
+                "path": dist_path
+            }), 500
 
 if __name__ == '__main__':
     port = int(os.getenv('FLASK_PORT', 5035))

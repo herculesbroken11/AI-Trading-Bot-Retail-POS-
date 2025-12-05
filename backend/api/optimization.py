@@ -94,9 +94,16 @@ def optimize_parameters():
         if not access_token:
             return jsonify({"error": "Not authenticated"}), 401
         
-        # Get watchlist symbols
-        from api.automation import get_watchlist
-        watchlist = get_watchlist()
+        # Get watchlist symbols from scheduler or environment
+        import os
+        from api.automation import scheduler
+        
+        if scheduler and scheduler.watchlist:
+            watchlist = scheduler.watchlist
+        else:
+            # Fallback to environment variable
+            watchlist_str = os.getenv("TRADING_WATCHLIST", "AAPL,MSFT,GOOGL,TSLA,NVDA")
+            watchlist = [s.strip().upper() for s in watchlist_str.split(",") if s.strip()]
         
         if not watchlist:
             return jsonify({"error": "No symbols in watchlist"}), 400

@@ -15,6 +15,7 @@ from ai.analyze import TradingAIAnalyzer
 from api.orders import execute_signal_helper
 from utils.helpers import get_valid_access_token, schwab_api_request
 from api.quotes import SCHWAB_HISTORICAL_URL, SCHWAB_QUOTES_URL
+from api.activity import add_activity_log
 
 logger = setup_logger("scheduler")
 
@@ -194,15 +195,25 @@ class TradingScheduler:
                     logger.debug(f"No setup found for {symbol}")
                     continue
                 
+                # Log setup detection
+                setup_type = setup.get('type', 'UNKNOWN')
+                add_activity_log('rule', f'Setup detected: {setup_type} for {symbol}', setup_type, symbol)
+                
                 # Check if 4 Fantastics are met (required for execution)
                 if not setup.get('fantastics', {}).get('all_fantastics', False):
                     logger.debug(f"{symbol}: 4 Fantastics not met")
+                    add_activity_log('warning', f'{symbol}: 4 Fantastics not met - skipping trade', '4 Fantastics', symbol)
                     continue
                 
-                    # AI analysis
-                    market_summary = self.ov_engine.get_market_summary(df)
-                    ai_analyzer = self._get_ai_analyzer()
-                    ai_signal = ai_analyzer.analyze_market_data(symbol, market_summary, setup)
+                # AI analysis
+                market_summary = self.ov_engine.get_market_summary(df)
+                ai_analyzer = self._get_ai_analyzer()
+                ai_signal = ai_analyzer.analyze_market_data(symbol, market_summary, setup)
+                
+                # Log AI analysis
+                confidence = ai_signal.get('confidence', 0)
+                action = ai_signal.get('action', 'HOLD')
+                add_activity_log('info', f'AI analysis for {symbol}: {action} (confidence: {confidence:.1%})', None, symbol)
                 
                 # Only execute if AI confirms and confidence > 0.7
                 if ai_signal.get('action') in ['BUY', 'SELL'] and ai_signal.get('confidence', 0) > 0.7:
@@ -226,8 +237,17 @@ class TradingScheduler:
                             }
                             self.position_manager.add_position(position)
                             logger.info(f"Position opened: {symbol}")
+                            
+                            # Log trade execution
+                            add_activity_log('success', 
+                                f'Trade executed: {ai_signal.get("action")} {symbol} @ ${ai_signal.get("entry", 0):.2f} (Setup: {setup.get("type")})',
+                                setup.get('type'),
+                                symbol)
+                        else:
+                            add_activity_log('warning', f'Trade execution failed for {symbol}: {result.get("error", "Unknown error")}', None, symbol)
                     except Exception as e:
                         logger.error(f"Failed to execute signal for {symbol}: {e}")
+                        add_activity_log('error', f'Error executing trade for {symbol}: {str(e)}', None, symbol)
                 
                 # Small delay between symbols
                 time.sleep(1)
@@ -334,6 +354,7 @@ class TradingScheduler:
         """Start the scheduler."""
         logger.info("Starting trading scheduler...")
         self.is_running = True
+        add_activity_log('success', 'Automated trading scheduler started', None, None)
         
         # Schedule tasks
         # Analyze market every 5 minutes during market hours
@@ -458,4 +479,5 @@ class TradingScheduler:
         logger.info("Stopping trading scheduler...")
         self.is_running = False
         schedule.clear()
+        add_activity_log('info', 'Automated trading scheduler stopped', None, None)
 

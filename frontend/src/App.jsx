@@ -8,6 +8,9 @@ import DailyReport from './components/DailyReport'
 import TradesTable from './components/TradesTable'
 import ComplianceMetrics from './components/ComplianceMetrics'
 import OptimizationPanel from './components/OptimizationPanel'
+import TradingActivityChart from './components/TradingActivityChart'
+import RulesVerification from './components/RulesVerification'
+import ActivityLog from './components/ActivityLog'
 import { getAccountId } from './services/api'
 
 function App() {
@@ -51,6 +54,12 @@ function App() {
       <ComplianceMetrics lastUpdate={lastUpdate} />
 
       <OptimizationPanel lastUpdate={lastUpdate} />
+
+      <TradingActivityChart accountId={accountId} lastUpdate={lastUpdate} />
+
+      <RulesVerification lastUpdate={lastUpdate} />
+
+      <ActivityLog lastUpdate={lastUpdate} />
     </div>
   )
 }

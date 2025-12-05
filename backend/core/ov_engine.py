@@ -431,6 +431,14 @@ class OVStrategyEngine:
         # Check 4 Fantastics first
         fantastics = self.check_4_fantastics(df)
         
+        # Log 4 Fantastics check
+        try:
+            from api.activity import add_activity_log
+            if fantastics.get('all_fantastics'):
+                add_activity_log('rule', '4 Fantastics: All conditions met', '4 Fantastics', None)
+        except:
+            pass  # Activity logging is optional
+        
         # Check advanced setups first (higher priority)
         # Apply setup weights from performance analyzer if available
         setups_to_check = []

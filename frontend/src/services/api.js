@@ -89,3 +89,11 @@ export async function optimizeParameters() {
   })
 }
 
+export async function getActivityLogs(limit = 50) {
+  return fetchJSON(`${API_BASE}/activity/logs?limit=${limit}`)
+}
+
+export async function getRulesStatus() {
+  return fetchJSON(`${API_BASE}/activity/rules/status`)
+}
+

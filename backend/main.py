@@ -91,52 +91,80 @@ def trading_signal():
 from flask import send_from_directory
 
 @app.route('/dashboard')
+@app.route('/dashboard/')
 @app.route('/dashboard/<path:path>')
 def dashboard(path='index.html'):
     """Serve React dashboard from frontend/dist."""
     import os
     from pathlib import Path
-    from flask import abort
-    
-    # Get the project root directory (parent of backend)
-    backend_dir = Path(__file__).parent.absolute()
-    project_root = backend_dir.parent.absolute()
-    frontend_dist = project_root / 'frontend' / 'dist'
-    
-    # Convert to absolute path string
-    dist_path = str(frontend_dist)
-    
-    # Check if directory exists
-    if not os.path.exists(dist_path):
-        logger.error(f"Dashboard directory not found: {dist_path}")
-        logger.error(f"Backend dir: {backend_dir}")
-        logger.error(f"Project root: {project_root}")
-        return jsonify({
-            "error": "Dashboard not found",
-            "path": dist_path,
-            "message": "Frontend build not found. Please run 'npm run build' in frontend directory."
-        }), 404
-    
-    # Check if file exists
-    file_path = os.path.join(dist_path, path)
-    if not os.path.exists(file_path) and path != 'index.html':
-        # For React Router - serve index.html for all routes
-        path = 'index.html'
+    from flask import abort, send_file
     
     try:
-        return send_from_directory(dist_path, path)
-    except Exception as e:
-        logger.error(f"Error serving dashboard file: {e}", exc_info=True)
-        # Fallback to index.html
-        try:
-            return send_from_directory(dist_path, 'index.html')
-        except Exception as e2:
-            logger.error(f"Error serving index.html: {e2}", exc_info=True)
+        # Get the project root directory (parent of backend)
+        backend_dir = Path(__file__).parent.absolute()
+        project_root = backend_dir.parent.absolute()
+        frontend_dist = project_root / 'frontend' / 'dist'
+        
+        # Convert to absolute path string
+        dist_path = str(frontend_dist)
+        
+        logger.info(f"Dashboard request - path: {path}, dist_path: {dist_path}")
+        
+        # Check if directory exists
+        if not os.path.exists(dist_path):
+            logger.error(f"Dashboard directory not found: {dist_path}")
+            logger.error(f"Backend dir: {backend_dir}")
+            logger.error(f"Project root: {project_root}")
             return jsonify({
-                "error": "Dashboard error",
-                "message": str(e2),
-                "path": dist_path
-            }), 500
+                "error": "Dashboard not found",
+                "path": dist_path,
+                "message": "Frontend build not found. Please run 'npm run build' in frontend directory."
+            }), 404
+        
+        # Handle root dashboard request
+        if path == 'index.html' or path == '':
+            index_path = os.path.join(dist_path, 'index.html')
+            if os.path.exists(index_path):
+                logger.info(f"Serving index.html from {index_path}")
+                return send_file(index_path)
+            else:
+                logger.error(f"index.html not found at {index_path}")
+                return jsonify({
+                    "error": "index.html not found",
+                    "path": index_path
+                }), 404
+        
+        # Check if file exists
+        file_path = os.path.join(dist_path, path)
+        logger.info(f"Checking file: {file_path}, exists: {os.path.exists(file_path)}")
+        
+        if not os.path.exists(file_path):
+            # For React Router - serve index.html for all routes
+            logger.info(f"File not found, serving index.html for React Router")
+            index_path = os.path.join(dist_path, 'index.html')
+            if os.path.exists(index_path):
+                return send_file(index_path)
+            else:
+                return jsonify({
+                    "error": "File not found and index.html missing",
+                    "requested": path,
+                    "dist_path": dist_path
+                }), 404
+        
+        # Serve the file
+        logger.info(f"Serving file: {file_path}")
+        return send_file(file_path)
+        
+    except Exception as e:
+        logger.error(f"Error serving dashboard: {e}", exc_info=True)
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"Traceback: {error_trace}")
+        return jsonify({
+            "error": "Dashboard error",
+            "message": str(e),
+            "traceback": error_trace
+        }), 500
 
 if __name__ == '__main__':
     port = int(os.getenv('FLASK_PORT', 5035))

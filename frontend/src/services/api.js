@@ -60,3 +60,32 @@ export async function getComplianceReport(startDate, endDate) {
   return fetchJSON(`${API_BASE}/reports/compliance?start_date=${startDate}&end_date=${endDate}`)
 }
 
+export async function getPerformanceAnalysis(days = 30) {
+  return fetchJSON(`${API_BASE}/optimization/performance?days=${days}`)
+}
+
+export async function getSetupWeights() {
+  return fetchJSON(`${API_BASE}/optimization/setup-weights`)
+}
+
+export async function getOptimizedParameters() {
+  return fetchJSON(`${API_BASE}/optimization/parameters`)
+}
+
+export async function getOptimizationSummary() {
+  return fetchJSON(`${API_BASE}/optimization/summary`)
+}
+
+export async function adjustSetupWeights(minTrades = 10) {
+  return fetchJSON(`${API_BASE}/optimization/adjust-weights`, {
+    method: 'POST',
+    body: JSON.stringify({ min_trades: minTrades })
+  })
+}
+
+export async function optimizeParameters() {
+  return fetchJSON(`${API_BASE}/optimization/optimize-parameters`, {
+    method: 'POST'
+  })
+}
+

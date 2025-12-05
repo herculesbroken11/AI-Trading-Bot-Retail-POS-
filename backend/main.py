@@ -15,6 +15,7 @@ from api.reports import reports_bp
 from api.streaming import streaming_bp
 from api.automation import automation_bp
 from api.positions import positions_bp
+from api.optimization import optimization_bp
 
 load_dotenv()
 
@@ -44,6 +45,7 @@ app.register_blueprint(reports_bp)
 app.register_blueprint(streaming_bp)
 app.register_blueprint(automation_bp)
 app.register_blueprint(positions_bp)
+app.register_blueprint(optimization_bp)
 
 @app.route('/', methods=['GET'])
 def index():

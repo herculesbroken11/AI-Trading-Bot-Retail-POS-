@@ -5,6 +5,7 @@ Handles automated position management: trailing stops, break-even, auto-close, a
 import os
 import json
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 from typing import Dict, Any, Optional, List
 from utils.logger import setup_logger
 from utils.helpers import get_valid_access_token, schwab_api_request
@@ -21,12 +22,24 @@ class PositionManager:
     - Position scaling (additions)
     """
     
-    def __init__(self):
+    def __init__(self, performance_analyzer=None):
         self.positions_file = "data/active_positions.json"
         self.max_risk_per_trade = float(os.getenv("MAX_RISK_PER_TRADE", "300"))
         self.auto_close_time = "16:00"  # 4:00 PM ET
-        self.trailing_stop_percent = 0.5  # Trail by 0.5 ATR
-        self.breakeven_profit_atr = 1.0  # Move to BE after 1 ATR profit
+        self.performance_analyzer = performance_analyzer
+        
+        # Load optimized parameters if available
+        if performance_analyzer:
+            params = performance_analyzer.get_optimized_parameters()
+            self.trailing_stop_percent = params.get("trailing_stop_atr", 0.5)
+            self.breakeven_profit_atr = params.get("breakeven_atr", 1.0)
+            self.stop_distance_atr = params.get("stop_distance_atr", 1.5)
+            self.target_distance_atr = params.get("target_distance_atr", 3.0)
+        else:
+            self.trailing_stop_percent = 0.5  # Trail by 0.5 ATR
+            self.breakeven_profit_atr = 1.0  # Move to BE after 1 ATR profit
+            self.stop_distance_atr = 1.5
+            self.target_distance_atr = 3.0
         
     def load_active_positions(self) -> List[Dict[str, Any]]:
         """Load active positions from file."""
@@ -303,11 +316,54 @@ class PositionManager:
                     }]
                 }
                 
-                url = f"{SCHWAB_ACCOUNTS_URL}/{account_id}/orders"
+                # Use account hash for API call
+                from api.orders import get_validated_account_hash
+                account_hash, _ = get_validated_account_hash(account_id, access_token)
+                url = f"{SCHWAB_ACCOUNTS_URL}/{account_hash}/orders"
                 response = schwab_api_request("POST", url, access_token, data=order)
                 
                 if response.status_code == 201:
-                    logger.info(f"Closed position: {symbol} ({quantity} shares)")
+                    # Try to get current price for accurate P&L
+                    exit_price = position.get('current_price') or position.get('entry_price', 0)
+                    try:
+                        from api.quotes import SCHWAB_QUOTES_URL
+                        quote_url = f"{SCHWAB_QUOTES_URL}?symbols={symbol}"
+                        quote_response = schwab_api_request("GET", quote_url, access_token)
+                        quote = quote_response.json()
+                        if isinstance(quote, dict) and symbol in quote:
+                            quote_data = quote[symbol]
+                            exit_price = quote_data.get('lastPrice') or quote_data.get('mark', exit_price)
+                    except:
+                        pass  # Use fallback price
+                    
+                    # Calculate P&L
+                    entry_price = position.get('entry_price') or position.get('average_entry', 0)
+                    direction = position.get('direction', 'LONG')
+                    if direction == 'LONG':
+                        pnl = (exit_price - entry_price) * quantity
+                    else:
+                        pnl = (entry_price - exit_price) * quantity
+                    
+                    # Record trade outcome if performance analyzer is available
+                    if self.performance_analyzer:
+                        try:
+                            trade_data = {
+                                "symbol": symbol,
+                                "setup_type": position.get("setup_type", "unknown"),
+                                "entry_price": entry_price,
+                                "exit_price": exit_price,
+                                "quantity": quantity,
+                                "direction": direction,
+                                "pnl": pnl,
+                                "status": "CLOSED",
+                                "entry_time": position.get("entry_time"),
+                                "exit_time": datetime.now(timezone.utc).isoformat()
+                            }
+                            self.performance_analyzer.record_trade_outcome(trade_data)
+                        except Exception as e:
+                            logger.error(f"Failed to record trade outcome: {e}")
+                    
+                    logger.info(f"Closed position: {symbol} ({quantity} shares) - P&L: ${pnl:.2f}")
                     closed.append(position)
                     self.remove_position(symbol, account_id)
                 else:

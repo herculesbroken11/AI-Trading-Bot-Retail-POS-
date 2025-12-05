@@ -23,10 +23,11 @@ class OVStrategyEngine:
     - Intraday setups: pullbacks, breakouts, reversals
     """
     
-    def __init__(self):
+    def __init__(self, performance_analyzer=None):
         self.sma_periods = [8, 20, 200]
         self.atr_period = 14
         self.rsi_period = 14
+        self.performance_analyzer = performance_analyzer
         
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -431,33 +432,52 @@ class OVStrategyEngine:
         fantastics = self.check_4_fantastics(df)
         
         # Check advanced setups first (higher priority)
+        # Apply setup weights from performance analyzer if available
+        setups_to_check = []
+        
         # 1. GBI (Gap Breakout)
         gbi_setup = self.identify_gbi_setup(df)
         if gbi_setup:
             gbi_setup["fantastics"] = fantastics
             gbi_setup["meets_75_percent_rule"] = self.check_75_percent_candle_rule(df)
-            return gbi_setup
+            weight = self.performance_analyzer.get_setup_weight("gbi") if self.performance_analyzer else 1.0
+            gbi_setup["weight"] = weight
+            setups_to_check.append(("gbi", gbi_setup, weight))
         
         # 2. Whale Setup
         whale_setup = self.identify_whale_setup(df)
         if whale_setup:
             whale_setup["fantastics"] = fantastics
             whale_setup["meets_75_percent_rule"] = self.check_75_percent_candle_rule(df)
-            return whale_setup
+            weight = self.performance_analyzer.get_setup_weight("whale") if self.performance_analyzer else 1.0
+            whale_setup["weight"] = weight
+            setups_to_check.append(("whale", whale_setup, weight))
         
         # 3. RBI (Rapid Breakout)
         rbi_setup = self.identify_rbi_setup(df)
         if rbi_setup:
             rbi_setup["fantastics"] = fantastics
             rbi_setup["meets_75_percent_rule"] = self.check_75_percent_candle_rule(df)
-            return rbi_setup
+            weight = self.performance_analyzer.get_setup_weight("rbi") if self.performance_analyzer else 1.0
+            rbi_setup["weight"] = weight
+            setups_to_check.append(("rbi", rbi_setup, weight))
         
         # 4. Kamikaze Setup
         kamikaze_setup = self.identify_kamikaze_setup(df)
         if kamikaze_setup:
             kamikaze_setup["fantastics"] = fantastics
             kamikaze_setup["meets_75_percent_rule"] = self.check_75_percent_candle_rule(df)
-            return kamikaze_setup
+            weight = self.performance_analyzer.get_setup_weight("kamikaze") if self.performance_analyzer else 1.0
+            kamikaze_setup["weight"] = weight
+            setups_to_check.append(("kamikaze", kamikaze_setup, weight))
+        
+        # If we have multiple setups, return the one with highest weight
+        if setups_to_check:
+            # Sort by weight (descending) and return the best one
+            setups_to_check.sort(key=lambda x: x[2], reverse=True)
+            best_setup_type, best_setup, best_weight = setups_to_check[0]
+            logger.info(f"Multiple setups found, selected {best_setup_type} with weight {best_weight:.3f}")
+            return best_setup
         
         # 5. Basic setups (Pullback/Breakout)
         setup = {

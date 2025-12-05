@@ -7,6 +7,7 @@ import PositionsTable from './components/PositionsTable'
 import DailyReport from './components/DailyReport'
 import TradesTable from './components/TradesTable'
 import ComplianceMetrics from './components/ComplianceMetrics'
+import OptimizationPanel from './components/OptimizationPanel'
 import { getAccountId } from './services/api'
 
 function App() {
@@ -48,6 +49,8 @@ function App() {
       <TradesTable accountId={accountId} lastUpdate={lastUpdate} />
 
       <ComplianceMetrics lastUpdate={lastUpdate} />
+
+      <OptimizationPanel lastUpdate={lastUpdate} />
     </div>
   )
 }

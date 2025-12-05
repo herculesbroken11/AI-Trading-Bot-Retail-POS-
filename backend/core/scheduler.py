@@ -10,6 +10,7 @@ from typing import List, Dict, Any
 from utils.logger import setup_logger
 from core.ov_engine import OVStrategyEngine
 from core.position_manager import PositionManager
+from core.performance_analyzer import PerformanceAnalyzer
 from ai.analyze import TradingAIAnalyzer
 from api.orders import execute_signal_helper
 from utils.helpers import get_valid_access_token, schwab_api_request
@@ -23,8 +24,13 @@ class TradingScheduler:
     """
     
     def __init__(self):
-        self.ov_engine = OVStrategyEngine()
-        self.position_manager = PositionManager()
+        # Initialize performance analyzer for optimization
+        self.performance_analyzer = PerformanceAnalyzer()
+        
+        # Initialize engines with performance analyzer
+        self.ov_engine = OVStrategyEngine(performance_analyzer=self.performance_analyzer)
+        self.position_manager = PositionManager(performance_analyzer=self.performance_analyzer)
+        
         # Lazy initialization of AI analyzer to avoid import errors at startup
         self.ai_analyzer = None
         self.watchlist = self._load_watchlist()
@@ -291,8 +297,38 @@ class TradingScheduler:
             return
         
         logger.info("Auto-closing all positions at 4:00 PM ET...")
+        # Pass performance analyzer to record outcomes
+        self.position_manager.performance_analyzer = self.performance_analyzer
         closed = self.position_manager.close_all_positions()
         logger.info(f"Closed {len(closed)} positions")
+        
+        # Record outcomes for all closed positions
+        for position in closed:
+            try:
+                # Get current price for P&L calculation
+                symbol = position.get('symbol')
+                access_token = get_valid_access_token()
+                if access_token:
+                    url = f"{SCHWAB_QUOTES_URL}?symbols={symbol}"
+                    response = schwab_api_request("GET", url, access_token)
+                    quote = response.json()
+                    
+                    if isinstance(quote, dict) and symbol in quote:
+                        quote_data = quote[symbol]
+                        exit_price = quote_data.get('lastPrice') or quote_data.get('mark', 0)
+                        
+                        entry_price = position.get('entry_price') or position.get('average_entry', 0)
+                        quantity = position.get('quantity', 0)
+                        direction = position.get('direction', 'LONG')
+                        
+                        if direction == 'LONG':
+                            pnl = (exit_price - entry_price) * quantity
+                        else:
+                            pnl = (entry_price - exit_price) * quantity
+                        
+                        self.record_trade_outcome(position, exit_price, pnl, "CLOSED")
+            except Exception as e:
+                logger.error(f"Failed to record outcome for {position.get('symbol')}: {e}")
     
     def start(self):
         """Start the scheduler."""
@@ -309,12 +345,113 @@ class TradingScheduler:
         # Auto-close at 4:00 PM ET
         schedule.every().day.at("16:00").do(self.auto_close_positions)
         
+        # Phase 7: Optimization tasks
+        # Run performance analysis daily at end of trading day
+        schedule.every().day.at("16:30").do(self.run_daily_optimization)
+        
+        # Auto-tune parameters weekly (Sunday evening)
+        schedule.every().sunday.at("20:00").do(self.run_parameter_optimization)
+        
         logger.info("Scheduler started. Monitoring market...")
         
         # Run scheduler loop
         while self.is_running:
             schedule.run_pending()
             time.sleep(30)  # Check every 30 seconds
+    
+    def run_daily_optimization(self):
+        """
+        Phase 7: Run daily performance analysis and adjust setup weights.
+        Runs at 4:30 PM ET (after market close).
+        """
+        logger.info("Running daily optimization...")
+        try:
+            # Analyze performance over last 30 days
+            analysis = self.performance_analyzer.analyze_performance(days=30)
+            
+            # Adjust setup weights based on performance
+            new_weights = self.performance_analyzer.adjust_setup_weights(min_trades=5)
+            
+            logger.info(f"Daily optimization complete. Setup weights: {new_weights}")
+            logger.info(f"Performance: {analysis.get('win_rate', 0):.1f}% win rate, ${analysis.get('total_pnl', 0):.2f} P&L")
+            
+        except Exception as e:
+            logger.error(f"Failed to run daily optimization: {e}", exc_info=True)
+    
+    def run_parameter_optimization(self):
+        """
+        Phase 7: Auto-tune parameters based on volatility.
+        Runs weekly on Sunday evening.
+        """
+        logger.info("Running parameter optimization...")
+        try:
+            # Get recent price data for volatility calculation
+            access_token = get_valid_access_token()
+            if not access_token:
+                logger.warning("Not authenticated - skipping parameter optimization")
+                return
+            
+            # Get prices for watchlist symbols
+            recent_prices = []
+            for symbol in self.watchlist[:5]:  # Use first 5 symbols
+                try:
+                    url = f"{SCHWAB_HISTORICAL_URL}?symbol={symbol}&periodType=day&period=1&frequencyType=minute&frequency=5"
+                    response = schwab_api_request("GET", url, access_token)
+                    data = response.json()
+                    
+                    # Extract close prices
+                    if isinstance(data, dict) and 'candles' in data:
+                        prices = [c.get('close', 0) for c in data['candles'] if c.get('close')]
+                        recent_prices.extend(prices)
+                except Exception as e:
+                    logger.debug(f"Failed to get prices for {symbol}: {e}")
+                    continue
+            
+            if recent_prices:
+                # Get recent trades for performance-based adjustment
+                recent_trades = self.performance_analyzer.performance_data.get("trades", [])[-50:]
+                
+                # Auto-tune parameters
+                optimized = self.performance_analyzer.auto_tune_parameters(
+                    recent_prices=recent_prices,
+                    recent_trades=recent_trades
+                )
+                
+                logger.info(f"Parameter optimization complete: {optimized}")
+            else:
+                logger.warning("No price data available for parameter optimization")
+                
+        except Exception as e:
+            logger.error(f"Failed to run parameter optimization: {e}", exc_info=True)
+    
+    def record_trade_outcome(self, position: Dict[str, Any], exit_price: float, pnl: float, status: str = "CLOSED"):
+        """
+        Phase 7: Record trade outcome for performance analysis.
+        
+        Args:
+            position: Position dictionary
+            exit_price: Exit price
+            pnl: Profit/loss in dollars
+            status: Trade status (CLOSED, OPEN, etc.)
+        """
+        try:
+            trade_data = {
+                "symbol": position.get("symbol"),
+                "setup_type": position.get("setup_type", "unknown"),
+                "entry_price": position.get("entry_price") or position.get("average_entry"),
+                "exit_price": exit_price,
+                "quantity": position.get("quantity", 0),
+                "direction": position.get("direction", "LONG"),
+                "pnl": pnl,
+                "status": status,
+                "entry_time": position.get("entry_time"),
+                "exit_time": datetime.now(timezone.utc).isoformat()
+            }
+            
+            self.performance_analyzer.record_trade_outcome(trade_data)
+            
+        except Exception as e:
+            logger.error(f"Failed to record trade outcome: {e}", exc_info=True)
     
     def stop(self):
         """Stop the scheduler."""

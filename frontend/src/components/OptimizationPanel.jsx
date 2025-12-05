@@ -64,7 +64,7 @@ function OptimizationPanel({ lastUpdate }) {
 
   return (
     <div className="card" style={{ marginTop: '20px' }}>
-      <h2>Phase 7: Optimization & Performance</h2>
+      <h2>Optimization & Performance</h2>
       
       {performance && (
         <div style={{ marginTop: '15px' }}>

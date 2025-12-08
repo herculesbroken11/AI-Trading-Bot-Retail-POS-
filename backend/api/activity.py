@@ -8,7 +8,6 @@ from flask import Blueprint, request, jsonify
 from datetime import datetime
 from pathlib import Path
 from utils.logger import setup_logger
-from api.automation import scheduler
 
 activity_bp = Blueprint('activity', __name__, url_prefix='/activity')
 logger = setup_logger("activity")
@@ -66,11 +65,15 @@ def get_rules_status():
     Get current status of OV trading rules.
     """
     try:
-        # Import scheduler from automation module
-        from api.automation import scheduler
-        
-        is_running = scheduler and scheduler.is_running if scheduler else False
-        is_market_hours = scheduler.is_market_hours() if scheduler else False
+        # Lazy import to avoid circular import
+        try:
+            from api.automation import scheduler
+            is_running = scheduler and scheduler.is_running if scheduler else False
+            is_market_hours = scheduler.is_market_hours() if scheduler else False
+        except (ImportError, AttributeError):
+            # If scheduler not available, default to False
+            is_running = False
+            is_market_hours = False
         
         # Get current time
         now = datetime.now()

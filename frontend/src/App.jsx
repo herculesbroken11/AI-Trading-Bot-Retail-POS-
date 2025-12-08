@@ -11,6 +11,7 @@ import OptimizationPanel from './components/OptimizationPanel'
 import TradingActivityChart from './components/TradingActivityChart'
 import RulesVerification from './components/RulesVerification'
 import ActivityLog from './components/ActivityLog'
+import MarketAnalysisStatus from './components/MarketAnalysisStatus'
 import { getAccountId } from './services/api'
 
 function App() {
@@ -58,6 +59,8 @@ function App() {
       <TradingActivityChart accountId={accountId} lastUpdate={lastUpdate} />
 
       <RulesVerification lastUpdate={lastUpdate} />
+
+      <MarketAnalysisStatus lastUpdate={lastUpdate} />
 
       <ActivityLog lastUpdate={lastUpdate} />
     </div>

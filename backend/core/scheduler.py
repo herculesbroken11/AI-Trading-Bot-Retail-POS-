@@ -97,15 +97,19 @@ class TradingScheduler:
             return
         
         logger.info("Starting automated market analysis...")
+        add_activity_log('info', f'Starting market analysis for {len(self.watchlist)} symbols', None, None)
         
         # Get valid access token (automatically refreshed if needed)
         access_token = get_valid_access_token()
         if not access_token:
             logger.error("Not authenticated - cannot analyze")
+            add_activity_log('error', 'Not authenticated - cannot analyze market', None, None)
             return
         
         for symbol in self.watchlist:
             try:
+                add_activity_log('info', f'Analyzing {symbol}...', None, symbol)
+                
                 # Get historical data using Schwab API directly
                 params = {
                     "symbol": symbol,
@@ -123,6 +127,7 @@ class TradingScheduler:
                 
                 if not historical_data or 'candles' not in historical_data:
                     logger.warning(f"No data for {symbol}")
+                    add_activity_log('warning', f'{symbol}: No market data available', None, symbol)
                     continue
                 
                 candles = historical_data['candles']
@@ -178,10 +183,12 @@ class TradingScheduler:
                 # Check if we have enough data before calculating indicators
                 if len(df) < 200:
                     logger.warning(f"Insufficient data for {symbol}: only {len(df)} candles (need 200+)")
+                    add_activity_log('warning', f'{symbol}: Insufficient data ({len(df)} candles, need 200+)', None, symbol)
                     continue
                 
                 # Calculate indicators
                 df = self.ov_engine.calculate_indicators(df)
+                add_activity_log('info', f'{symbol}: Indicators calculated (SMA8/20/200, ATR14, RSI)', None, symbol)
                 
                 # Check if indicators were calculated (they might not be if data is still insufficient)
                 if 'sma_8' not in df.columns or 'sma_20' not in df.columns or 'sma_200' not in df.columns:
@@ -193,6 +200,7 @@ class TradingScheduler:
                 
                 if not setup:
                     logger.debug(f"No setup found for {symbol}")
+                    add_activity_log('info', f'{symbol}: No OV setup detected (checking next symbol)', None, symbol)
                     continue
                 
                 # Log setup detection
@@ -200,10 +208,24 @@ class TradingScheduler:
                 add_activity_log('rule', f'Setup detected: {setup_type} for {symbol}', setup_type, symbol)
                 
                 # Check if 4 Fantastics are met (required for execution)
-                if not setup.get('fantastics', {}).get('all_fantastics', False):
+                fantastics = setup.get('fantastics', {})
+                if not fantastics.get('all_fantastics', False):
                     logger.debug(f"{symbol}: 4 Fantastics not met")
-                    add_activity_log('warning', f'{symbol}: 4 Fantastics not met - skipping trade', '4 Fantastics', symbol)
+                    # Log which fantastics are missing
+                    missing = []
+                    if not fantastics.get('price_above_sma200', False):
+                        missing.append('Price above SMA200')
+                    if not fantastics.get('sma_aligned', False):
+                        missing.append('SMA alignment')
+                    if not fantastics.get('volume_above_average', False):
+                        missing.append('Volume above average')
+                    if not fantastics.get('rsi_in_range', False):
+                        missing.append('RSI in range')
+                    missing_str = ', '.join(missing) if missing else 'Unknown'
+                    add_activity_log('warning', f'{symbol}: 4 Fantastics not met - Missing: {missing_str}', '4 Fantastics', symbol)
                     continue
+                
+                add_activity_log('success', f'{symbol}: ✓ 4 Fantastics confirmed!', '4 Fantastics', symbol)
                 
                 # AI analysis
                 market_summary = self.ov_engine.get_market_summary(df)
@@ -216,6 +238,12 @@ class TradingScheduler:
                 add_activity_log('info', f'AI analysis for {symbol}: {action} (confidence: {confidence:.1%})', None, symbol)
                 
                 # Only execute if AI confirms and confidence > 0.7
+                if ai_signal.get('action') in ['BUY', 'SELL'] and ai_signal.get('confidence', 0) > 0.7:
+                    add_activity_log('success', f'{symbol}: AI confirmed {action} signal with {confidence:.1%} confidence - Proceeding to execute', None, symbol)
+                else:
+                    reason = 'HOLD signal' if action == 'HOLD' else f'Low confidence ({confidence:.1%} < 70%)'
+                    add_activity_log('warning', f'{symbol}: Trade not executed - {reason}', None, symbol)
+                
                 if ai_signal.get('action') in ['BUY', 'SELL'] and ai_signal.get('confidence', 0) > 0.7:
                     logger.info(f"Signal found for {symbol}: {ai_signal.get('action')}")
                     
@@ -257,6 +285,7 @@ class TradingScheduler:
                 continue
         
         logger.info("Market analysis complete")
+        add_activity_log('info', f'Market analysis complete - Analyzed {len(self.watchlist)} symbols', None, None)
     
     def update_positions(self):
         """

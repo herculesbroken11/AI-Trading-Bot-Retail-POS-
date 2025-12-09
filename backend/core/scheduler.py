@@ -249,6 +249,39 @@ class TradingScheduler:
                     
                     # Execute signal
                     try:
+                        # Check account balance before attempting trade
+                        try:
+                            from api.orders import SCHWAB_ACCOUNTS_URL, get_validated_account_hash
+                            accounts_response = schwab_api_request("GET", SCHWAB_ACCOUNTS_URL, access_token)
+                            accounts = accounts_response.json()
+                            if accounts and len(accounts) > 0:
+                                account_id = accounts[0].get("accountNumber", "")
+                                account_hash, _ = get_validated_account_hash(account_id, access_token)
+                                account_url = f"{SCHWAB_ACCOUNTS_URL}/{account_hash}"
+                                account_response = schwab_api_request("GET", account_url, access_token)
+                                account_data = account_response.json()
+                                
+                                if account_data:
+                                    balances = account_data.get('currentBalances', {})
+                                    available_funds = float(balances.get('availableFunds', 0) or 0)
+                                    buying_power = float(balances.get('buyingPower', 0) or 0)
+                                    account_value = float(balances.get('liquidationValue', balances.get('totalEquity', 0)) or 0)
+                                    
+                                    add_activity_log('info', f'Account balance: ${account_value:.2f}, Buying power: ${buying_power:.2f}', None, None)
+                                    
+                                    # Estimate order cost
+                                    entry_price = float(ai_signal.get('entry', 0))
+                                    position_size = ai_signal.get('position_size', 1)
+                                    estimated_cost = entry_price * position_size
+                                    
+                                    if available_funds > 0 and estimated_cost > available_funds:
+                                        add_activity_log('warning', 
+                                            f'Insufficient funds for {symbol}: Need ${estimated_cost:.2f}, have ${available_funds:.2f}',
+                                            None, symbol)
+                                        continue
+                        except Exception as e:
+                            logger.warning(f"Could not check account balance: {e}")
+                        
                         result = execute_signal_helper(ai_signal, access_token)
                         if result and result.get('status') == 'success':
                             # Add to position manager

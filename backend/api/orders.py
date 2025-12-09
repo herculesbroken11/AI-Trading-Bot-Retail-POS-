@@ -352,28 +352,66 @@ def execute_signal_helper(signal: dict, access_token: str) -> dict:
         raise ValueError(error_msg)
     
     # Get account ID if not provided
-    if "accountId" not in signal:
+    account_id = signal.get("accountId")
+    if not account_id:
         try:
             accounts_response = schwab_api_request("GET", SCHWAB_ACCOUNTS_URL, access_token)
             accounts = accounts_response.json()
             if accounts and len(accounts) > 0:
-                signal["accountId"] = accounts[0].get("accountNumber", "")
+                account_id = accounts[0].get("accountNumber", "")
+                signal["accountId"] = account_id
             else:
                 raise ValueError("No accounts found")
         except Exception as e:
             logger.error(f"Failed to get accounts: {e}")
             raise ValueError("Could not retrieve account")
     
+    # Get actual account balance and buying power
+    
+    # Get actual account balance
+    account_value = 0
+    buying_power = 0
+    available_funds = 0
+    if account_id:
+        try:
+            account_hash, _ = get_validated_account_hash(account_id, access_token)
+            account_url = f"{SCHWAB_ACCOUNTS_URL}/{account_hash}"
+            account_response = schwab_api_request("GET", account_url, access_token)
+            account_data = account_response.json()
+            
+            if account_data:
+                balances = account_data.get('currentBalances', {})
+                account_value = float(balances.get('liquidationValue', balances.get('totalEquity', 0)) or 0)
+                buying_power = float(balances.get('buyingPower', 0) or 0)
+                available_funds = float(balances.get('availableFunds', 0) or 0)
+                logger.info(f"Account balance: ${account_value:.2f}, Buying power: ${buying_power:.2f}, Available: ${available_funds:.2f}")
+        except Exception as e:
+            logger.warning(f"Failed to get account balance: {e}, using defaults")
+            account_value = 10000  # Fallback default
+    
     # Calculate position size if not provided
     if "position_size" not in signal or signal["position_size"] == 0:
-        # Get account value (simplified - should fetch actual account value)
-        account_value = 10000  # Default
         signal["position_size"] = calculate_position_size(
-            account_value,
+            account_value if account_value > 0 else 10000,
             signal["entry"],
             signal["stop"],
             MAX_TRADE_AMOUNT
         )
+    
+    # Check if we have sufficient funds for this trade
+    entry_price = float(signal.get("entry", 0))
+    quantity = signal.get("position_size", 0)
+    order_cost = entry_price * quantity
+    
+    if signal.get("action") == "BUY":
+        if available_funds > 0 and order_cost > available_funds:
+            error_msg = f"Insufficient funds: Need ${order_cost:.2f}, have ${available_funds:.2f}"
+            logger.warning(error_msg)
+            raise ValueError(error_msg)
+        elif buying_power > 0 and order_cost > buying_power:
+            error_msg = f"Insufficient buying power: Need ${order_cost:.2f}, have ${buying_power:.2f}"
+            logger.warning(error_msg)
+            raise ValueError(error_msg)
     
     # Build order
     order_data = {

@@ -42,15 +42,17 @@ class TradingAIAnalyzer:
         self,
         symbol: str,
         market_summary: Dict[str, Any],
-        setup: Optional[Dict[str, Any]] = None
+        setup: Optional[Dict[str, Any]] = None,
+        chart_image: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Analyze market data using GPT-5 and generate trading signal.
+        Analyze market data using GPT-4o with vision and generate trading signal.
         
         Args:
             symbol: Stock symbol
             market_summary: Market summary from OV engine
             setup: Optional identified setup from strategy engine
+            chart_image: Optional base64-encoded chart image for vision analysis
             
         Returns:
             Trading signal dictionary
@@ -59,19 +61,50 @@ class TradingAIAnalyzer:
             # Build prompt based on Oliver Vélez rules
             prompt = self._build_analysis_prompt(symbol, market_summary, setup)
             
-            # Call OpenAI API
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
+            # Prepare messages
+            messages = [
+                {
+                    "role": "system",
+                    "content": self._get_system_prompt()
+                }
+            ]
+            
+            # Add chart image if provided (for vision analysis)
+            if chart_image:
+                user_content = [
                     {
-                        "role": "system",
-                        "content": self._get_system_prompt()
+                        "type": "text",
+                        "text": prompt + "\n\nIMPORTANT: Analyze the provided chart image carefully. Look for:\n"
+                                "- Visual confirmation of trend (price position relative to SMAs)\n"
+                                "- Candlestick patterns (engulfing, doji, hammers, etc.)\n"
+                                "- Volume spikes visible in the chart\n"
+                                "- Support/resistance levels\n"
+                                "- Visual setup patterns (pullbacks, breakouts, reversals)\n"
+                                "- 75% candle rule compliance (visual inspection)\n"
+                                "The chart shows candlesticks with SMA8 (blue), SMA20 (orange), SMA200 (purple), and volume bars.\n"
+                                "Use both the numerical data AND the visual chart to make your decision."
                     },
                     {
-                        "role": "user",
-                        "content": prompt
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{chart_image}"
+                        }
                     }
-                ],
+                ]
+                messages.append({
+                    "role": "user",
+                    "content": user_content
+                })
+            else:
+                messages.append({
+                    "role": "user",
+                    "content": prompt
+                })
+            
+            # Call OpenAI API with vision support
+            response = self.client.chat.completions.create(
+                model="gpt-4o",  # GPT-4o supports vision
+                messages=messages,
                 temperature=0.3,  # Lower temperature for more consistent analysis
                 response_format={"type": "json_object"}
             )
@@ -80,7 +113,8 @@ class TradingAIAnalyzer:
             content = response.choices[0].message.content
             signal = json.loads(content)
             
-            logger.info(f"AI analysis completed for {symbol}: {signal.get('action', 'NONE')}")
+            analysis_type = "with chart vision" if chart_image else "text-only"
+            logger.info(f"AI analysis completed for {symbol} ({analysis_type}): {signal.get('action', 'NONE')}")
             
             return signal
             
@@ -91,6 +125,15 @@ class TradingAIAnalyzer:
     def _get_system_prompt(self) -> str:
         """Get system prompt with Oliver Vélez trading rules."""
         return """You are an expert trading analyst specializing in the Oliver Vélez intraday trading methodology.
+
+When analyzing charts with images:
+- Carefully examine the candlestick patterns visually
+- Verify SMA alignment visually (SMA8 above/below SMA20, price relative to SMA200)
+- Check volume bars for confirmation spikes
+- Look for visual patterns: pullbacks, breakouts, reversals, gaps
+- Verify 75% candle rule by visual inspection of candle bodies
+- Identify support/resistance levels from the chart
+- Use BOTH numerical data AND visual chart patterns for decision-making
 
 Key Rules:
 1. Trend Identification:

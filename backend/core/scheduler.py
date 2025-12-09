@@ -227,15 +227,29 @@ class TradingScheduler:
                 
                 add_activity_log('success', f'{symbol}: ✓ 4 Fantastics confirmed!', '4 Fantastics', symbol)
                 
-                # AI analysis
+                # Generate chart image for AI vision analysis
+                chart_image = None
+                try:
+                    from utils.chart_generator import generate_trading_chart
+                    chart_image = generate_trading_chart(df, symbol, setup)
+                    if chart_image:
+                        add_activity_log('info', f'{symbol}: 📊 Chart generated for AI vision analysis', None, symbol)
+                    else:
+                        add_activity_log('warning', f'{symbol}: Failed to generate chart, using text-only analysis', None, symbol)
+                except Exception as e:
+                    logger.warning(f"Failed to generate chart for {symbol}: {e}")
+                    add_activity_log('warning', f'{symbol}: Chart generation failed, using text-only analysis', None, symbol)
+                
+                # AI analysis with chart image (if available)
                 market_summary = self.ov_engine.get_market_summary(df)
                 ai_analyzer = self._get_ai_analyzer()
-                ai_signal = ai_analyzer.analyze_market_data(symbol, market_summary, setup)
+                ai_signal = ai_analyzer.analyze_market_data(symbol, market_summary, setup, chart_image)
                 
                 # Log AI analysis
                 confidence = ai_signal.get('confidence', 0)
                 action = ai_signal.get('action', 'HOLD')
-                add_activity_log('info', f'AI analysis for {symbol}: {action} (confidence: {confidence:.1%})', None, symbol)
+                analysis_type = "with chart vision" if chart_image else "text-only"
+                add_activity_log('info', f'AI analysis for {symbol} ({analysis_type}): {action} (confidence: {confidence:.1%})', None, symbol)
                 
                 # Only execute if AI confirms and confidence > 0.7
                 if ai_signal.get('action') in ['BUY', 'SELL'] and ai_signal.get('confidence', 0) > 0.7:

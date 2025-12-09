@@ -97,11 +97,3 @@ export async function getRulesStatus() {
   return fetchJSON(`${API_BASE}/activity/rules/status`)
 }
 
-export async function getRecentCharts(limit = 10, symbol = null) {
-  let url = `${API_BASE}/activity/charts?limit=${limit}`
-  if (symbol) {
-    url += `&symbol=${symbol}`
-  }
-  return fetchJSON(url)
-}
-

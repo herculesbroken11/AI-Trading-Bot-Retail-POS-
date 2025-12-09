@@ -231,7 +231,8 @@ class TradingScheduler:
                 chart_image = None
                 try:
                     from utils.chart_generator import generate_trading_chart
-                    chart_image = generate_trading_chart(df, symbol, setup)
+                    market_summary = self.ov_engine.get_market_summary(df)
+                    chart_image = generate_trading_chart(df, symbol, setup, market_summary)
                     if chart_image:
                         add_activity_log('info', f'{symbol}: 📊 Chart generated for AI vision analysis', None, symbol)
                     else:
@@ -241,7 +242,8 @@ class TradingScheduler:
                     add_activity_log('warning', f'{symbol}: Chart generation failed, using text-only analysis', None, symbol)
                 
                 # AI analysis with chart image (if available)
-                market_summary = self.ov_engine.get_market_summary(df)
+                if not market_summary:
+                    market_summary = self.ov_engine.get_market_summary(df)
                 ai_analyzer = self._get_ai_analyzer()
                 ai_signal = ai_analyzer.analyze_market_data(symbol, market_summary, setup, chart_image)
                 

@@ -30,10 +30,7 @@ function MarketAnalysisStatus({ lastUpdate }) {
             log.message.includes('Setup detected') ||
             log.message.includes('4 Fantastics') ||
             log.message.includes('AI analysis') ||
-            log.message.includes('Market analysis') ||
-            log.message.includes('Chart generated') ||
-            log.message.includes('vision analysis') ||
-            log.message.includes('chart')
+            log.message.includes('Market analysis')
           )
         )
         setRecentActivity(analysisLogs.slice(0, 10))
@@ -73,7 +70,7 @@ function MarketAnalysisStatus({ lastUpdate }) {
     <div className="card" style={{ marginTop: '20px' }}>
       <h2>Live Market Analysis Status</h2>
       <p style={{ color: '#9ca3af', marginBottom: '20px', fontSize: '14px' }}>
-        Real-time view of what the system is checking and analyzing right now. The AI uses chart images to visually verify OV trading rules.
+        Real-time view of what the system is checking and analyzing right now.
       </p>
 
       {status && (
@@ -196,8 +193,7 @@ function MarketAnalysisStatus({ lastUpdate }) {
           <ul style={{ marginTop: '8px', paddingLeft: '20px' }}>
             <li>An OV setup is detected (Whale, Kamikaze, RBI, GBI, etc.)</li>
             <li>All 4 Fantastics conditions are met</li>
-            <li>Chart is generated and analyzed by AI vision</li>
-            <li>AI confirms with confidence &gt; 70% (using both data and visual chart analysis)</li>
+            <li>AI confirms with confidence &gt; 70%</li>
           </ul>
         </div>
       )}

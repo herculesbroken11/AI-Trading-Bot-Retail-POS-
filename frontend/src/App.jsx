@@ -12,7 +12,6 @@ import TradingActivityChart from './components/TradingActivityChart'
 import RulesVerification from './components/RulesVerification'
 import ActivityLog from './components/ActivityLog'
 import MarketAnalysisStatus from './components/MarketAnalysisStatus'
-import ChartGallery from './components/ChartGallery'
 import { getAccountId } from './services/api'
 
 function App() {
@@ -62,8 +61,6 @@ function App() {
       <RulesVerification lastUpdate={lastUpdate} />
 
       <MarketAnalysisStatus lastUpdate={lastUpdate} />
-
-      <ChartGallery lastUpdate={lastUpdate} />
 
       <ActivityLog lastUpdate={lastUpdate} />
     </div>

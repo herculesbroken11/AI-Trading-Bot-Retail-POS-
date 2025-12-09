@@ -15,6 +15,10 @@ logger = setup_logger("activity")
 # In-memory activity log (in production, use Redis or database)
 activity_log = []
 
+# In-memory chart cache (stores recent charts for dashboard display)
+chart_cache = []
+MAX_CHART_CACHE = 20  # Keep last 20 charts
+
 def add_activity_log(log_type, message, rule=None, symbol=None):
     """Add entry to activity log."""
     entry = {
@@ -152,6 +156,59 @@ def get_rules_status():
     except Exception as e:
         logger.error(f"Failed to get rules status: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
+
+@activity_bp.route('/charts', methods=['GET'])
+def get_recent_charts():
+    """
+    Get recent chart images that were analyzed.
+    
+    Query params:
+        limit: Number of charts to return (default: 10)
+        symbol: Filter by symbol (optional)
+    """
+    try:
+        limit = int(request.args.get('limit', 10))
+        symbol_filter = request.args.get('symbol')
+        
+        charts = chart_cache[-limit:] if chart_cache else []
+        
+        # Filter by symbol if provided
+        if symbol_filter:
+            charts = [c for c in charts if c.get('symbol') == symbol_filter]
+        
+        # Reverse to show most recent first
+        charts.reverse()
+        
+        return jsonify({
+            "charts": charts,
+            "total": len(chart_cache)
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Failed to get charts: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+def add_chart_to_cache(symbol, chart_image_base64, setup_info=None, ai_signal=None):
+    """Add chart to cache for dashboard display."""
+    if not chart_image_base64:
+        return
+    
+    entry = {
+        "symbol": symbol,
+        "timestamp": datetime.now().isoformat(),
+        "chart_image": chart_image_base64,
+        "setup_type": setup_info.get('type') if setup_info else None,
+        "ai_action": ai_signal.get('action') if ai_signal else None,
+        "ai_confidence": ai_signal.get('confidence') if ai_signal else None
+    }
+    
+    chart_cache.append(entry)
+    
+    # Keep only last N charts
+    if len(chart_cache) > MAX_CHART_CACHE:
+        chart_cache.pop(0)
+    
+    return entry
 
 # Initialize with some default logs
 add_activity_log("info", "Activity log system initialized")

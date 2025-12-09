@@ -245,6 +245,14 @@ class TradingScheduler:
                 ai_analyzer = self._get_ai_analyzer()
                 ai_signal = ai_analyzer.analyze_market_data(symbol, market_summary, setup, chart_image)
                 
+                # Store chart in cache for dashboard display
+                if chart_image:
+                    try:
+                        from api.activity import add_chart_to_cache
+                        add_chart_to_cache(symbol, chart_image, setup, ai_signal)
+                    except Exception as e:
+                        logger.warning(f"Failed to cache chart for {symbol}: {e}")
+                
                 # Log AI analysis
                 confidence = ai_signal.get('confidence', 0)
                 action = ai_signal.get('action', 'HOLD')

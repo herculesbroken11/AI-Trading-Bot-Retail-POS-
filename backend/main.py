@@ -17,6 +17,7 @@ from api.automation import automation_bp
 from api.positions import positions_bp
 from api.optimization import optimization_bp
 from api.activity import activity_bp
+from api.vision import vision_bp
 
 load_dotenv()
 
@@ -48,6 +49,7 @@ app.register_blueprint(automation_bp)
 app.register_blueprint(positions_bp)
 app.register_blueprint(optimization_bp)
 app.register_blueprint(activity_bp)
+app.register_blueprint(vision_bp)
 
 @app.route('/', methods=['GET'])
 def index():

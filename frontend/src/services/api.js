@@ -97,3 +97,52 @@ export async function getRulesStatus() {
   return fetchJSON(`${API_BASE}/activity/rules/status`)
 }
 
+export async function analyzeImage(file, imageUrl, symbol) {
+  try {
+    if (file) {
+      // File upload using FormData
+      const formData = new FormData()
+      formData.append('file', file)
+      if (symbol) {
+        formData.append('symbol', symbol)
+      }
+      
+      const response = await fetch(`${API_BASE}/vision/analyze`, {
+        method: 'POST',
+        body: formData
+      })
+      
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.error || `HTTP error! status: ${response.status}`)
+      }
+      
+      return await response.json()
+    } else if (imageUrl) {
+      // URL upload using JSON
+      const response = await fetch(`${API_BASE}/vision/analyze`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          image_url: imageUrl,
+          symbol: symbol || 'UNKNOWN'
+        })
+      })
+      
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.error || `HTTP error! status: ${response.status}`)
+      }
+      
+      return await response.json()
+    } else {
+      throw new Error('Either file or imageUrl must be provided')
+    }
+  } catch (error) {
+    console.error('Vision analysis error:', error)
+    throw error
+  }
+}
+

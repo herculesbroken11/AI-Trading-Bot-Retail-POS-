@@ -12,6 +12,7 @@ import TradingActivityChart from './components/TradingActivityChart'
 import RulesVerification from './components/RulesVerification'
 import ActivityLog from './components/ActivityLog'
 import MarketAnalysisStatus from './components/MarketAnalysisStatus'
+import VisionAnalyzer from './components/VisionAnalyzer'
 import { getAccountId } from './services/api'
 
 function App() {
@@ -45,6 +46,8 @@ function App() {
         <AccountSummary accountId={accountId} lastUpdate={lastUpdate} />
         <SystemHealth lastUpdate={lastUpdate} />
       </div>
+
+      <VisionAnalyzer />
 
       <PositionsTable lastUpdate={lastUpdate} />
 

@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { analyzeImage } from '../services/api'
+import './Card.css'
 
 function VisionAnalyzer() {
   const [file, setFile] = useState(null)
@@ -61,13 +62,8 @@ function VisionAnalyzer() {
   }
 
   return (
-    <div className="vision-analyzer" style={{
-      background: '#1a1a1a',
-      padding: '20px',
-      borderRadius: '8px',
-      marginBottom: '20px'
-    }}>
-      <h2 style={{ color: '#fff', marginBottom: '20px' }}>📊 AI Vision Chart Analysis</h2>
+    <div className="card">
+      <h2>📊 AI Vision Chart Analysis</h2>
       
       <form onSubmit={handleSubmit} style={{ marginBottom: '20px' }}>
         <div style={{ marginBottom: '15px' }}>
@@ -82,10 +78,10 @@ function VisionAnalyzer() {
             style={{
               width: '100%',
               padding: '10px',
-              background: '#0f0f0f',
-              border: '1px solid #374151',
-              borderRadius: '4px',
-              color: '#fff',
+              background: '#2a2f4a',
+              border: '1px solid #2a2f4a',
+              borderRadius: '5px',
+              color: '#e0e0e0',
               fontSize: '14px'
             }}
           />
@@ -102,10 +98,10 @@ function VisionAnalyzer() {
             style={{
               width: '100%',
               padding: '10px',
-              background: '#0f0f0f',
-              border: '1px solid #374151',
-              borderRadius: '4px',
-              color: '#fff',
+              background: '#2a2f4a',
+              border: '1px solid #2a2f4a',
+              borderRadius: '5px',
+              color: '#e0e0e0',
               fontSize: '14px'
             }}
           />
@@ -127,10 +123,10 @@ function VisionAnalyzer() {
             style={{
               width: '100%',
               padding: '10px',
-              background: '#0f0f0f',
-              border: '1px solid #374151',
-              borderRadius: '4px',
-              color: '#fff',
+              background: '#2a2f4a',
+              border: '1px solid #2a2f4a',
+              borderRadius: '5px',
+              color: '#e0e0e0',
               fontSize: '14px'
             }}
           />
@@ -144,8 +140,8 @@ function VisionAnalyzer() {
               style={{
                 maxWidth: '100%',
                 maxHeight: '300px',
-                borderRadius: '4px',
-                border: '1px solid #374151'
+                borderRadius: '5px',
+                border: '1px solid #2a2f4a'
               }}
             />
           </div>
@@ -155,17 +151,16 @@ function VisionAnalyzer() {
           <button
             type="submit"
             disabled={loading || (!file && !imageUrl)}
+            className="btn"
             style={{
               flex: 1,
               padding: '12px',
-              background: loading ? '#374151' : '#3b82f6',
-              color: '#fff',
-              border: 'none',
-              borderRadius: '4px',
+              opacity: loading ? 0.5 : 1,
               cursor: loading ? 'not-allowed' : 'pointer',
               fontSize: '14px',
               fontWeight: 'bold'
             }}
+            disabled={loading || (!file && !imageUrl)}
           >
             {loading ? 'Analyzing...' : '🔍 Analyze Chart'}
           </button>
@@ -174,13 +169,10 @@ function VisionAnalyzer() {
             <button
               type="button"
               onClick={handleReset}
+              className="btn"
               style={{
                 padding: '12px 20px',
-                background: '#374151',
-                color: '#fff',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
+                background: '#2a2f4a',
                 fontSize: '14px'
               }}
             >
@@ -193,9 +185,9 @@ function VisionAnalyzer() {
       {error && (
         <div style={{
           padding: '15px',
-          background: '#7f1d1d',
+          background: '#2a1f1f',
           border: '1px solid #ef4444',
-          borderRadius: '4px',
+          borderRadius: '5px',
           color: '#fca5a5',
           marginBottom: '15px'
         }}>
@@ -205,17 +197,18 @@ function VisionAnalyzer() {
 
       {analysis && (
         <div className="analysis-results" style={{
-          background: '#0f0f0f',
+          background: '#2a2f4a',
           padding: '20px',
-          borderRadius: '4px',
-          border: '1px solid #374151'
+          borderRadius: '10px',
+          border: '1px solid #2a2f4a',
+          marginTop: '20px'
         }}>
-          <h3 style={{ color: '#fff', marginBottom: '15px', fontSize: '18px' }}>
+          <h3 style={{ color: '#667eea', marginBottom: '15px', fontSize: '18px' }}>
             AI Analysis Results
           </h3>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '15px', marginBottom: '20px' }}>
-            <div style={{ background: '#1a1a1a', padding: '15px', borderRadius: '4px' }}>
+            <div style={{ background: '#1a1f3a', padding: '15px', borderRadius: '5px' }}>
               <div style={{ color: '#9ca3af', fontSize: '12px', marginBottom: '5px' }}>Action</div>
               <div style={{
                 color: analysis.action === 'BUY' ? '#10b981' : analysis.action === 'SELL' ? '#ef4444' : '#9ca3af',
@@ -226,28 +219,28 @@ function VisionAnalyzer() {
               </div>
             </div>
 
-            <div style={{ background: '#1a1a1a', padding: '15px', borderRadius: '4px' }}>
+            <div style={{ background: '#1a1f3a', padding: '15px', borderRadius: '5px' }}>
               <div style={{ color: '#9ca3af', fontSize: '12px', marginBottom: '5px' }}>Confidence</div>
-              <div style={{ color: '#fff', fontSize: '18px', fontWeight: 'bold' }}>
+              <div style={{ color: '#e0e0e0', fontSize: '18px', fontWeight: 'bold' }}>
                 {(analysis.confidence * 100).toFixed(1)}%
               </div>
             </div>
 
-            <div style={{ background: '#1a1a1a', padding: '15px', borderRadius: '4px' }}>
+            <div style={{ background: '#1a1f3a', padding: '15px', borderRadius: '5px' }}>
               <div style={{ color: '#9ca3af', fontSize: '12px', marginBottom: '5px' }}>Entry</div>
-              <div style={{ color: '#fff', fontSize: '18px', fontWeight: 'bold' }}>
+              <div style={{ color: '#e0e0e0', fontSize: '18px', fontWeight: 'bold' }}>
                 ${analysis.entry?.toFixed(2) || 'N/A'}
               </div>
             </div>
 
-            <div style={{ background: '#1a1a1a', padding: '15px', borderRadius: '4px' }}>
+            <div style={{ background: '#1a1f3a', padding: '15px', borderRadius: '5px' }}>
               <div style={{ color: '#9ca3af', fontSize: '12px', marginBottom: '5px' }}>Stop Loss</div>
               <div style={{ color: '#ef4444', fontSize: '18px', fontWeight: 'bold' }}>
                 ${analysis.stop?.toFixed(2) || 'N/A'}
               </div>
             </div>
 
-            <div style={{ background: '#1a1a1a', padding: '15px', borderRadius: '4px' }}>
+            <div style={{ background: '#1a1f3a', padding: '15px', borderRadius: '5px' }}>
               <div style={{ color: '#9ca3af', fontSize: '12px', marginBottom: '5px' }}>Take Profit</div>
               <div style={{ color: '#10b981', fontSize: '18px', fontWeight: 'bold' }}>
                 ${analysis.target?.toFixed(2) || 'N/A'}
@@ -255,9 +248,9 @@ function VisionAnalyzer() {
             </div>
 
             {analysis.risk_reward_ratio && (
-              <div style={{ background: '#1a1a1a', padding: '15px', borderRadius: '4px' }}>
+              <div style={{ background: '#1a1f3a', padding: '15px', borderRadius: '5px' }}>
                 <div style={{ color: '#9ca3af', fontSize: '12px', marginBottom: '5px' }}>Risk/Reward</div>
-                <div style={{ color: '#fff', fontSize: '18px', fontWeight: 'bold' }}>
+                <div style={{ color: '#e0e0e0', fontSize: '18px', fontWeight: 'bold' }}>
                   1:{analysis.risk_reward_ratio.toFixed(2)}
                 </div>
               </div>
@@ -267,7 +260,7 @@ function VisionAnalyzer() {
           {analysis.setup_type && (
             <div style={{ marginBottom: '15px' }}>
               <div style={{ color: '#9ca3af', fontSize: '12px', marginBottom: '5px' }}>Setup Type</div>
-              <div style={{ color: '#3b82f6', fontSize: '16px', fontWeight: 'bold' }}>
+              <div style={{ color: '#667eea', fontSize: '16px', fontWeight: 'bold' }}>
                 {analysis.setup_type}
               </div>
             </div>
@@ -276,7 +269,7 @@ function VisionAnalyzer() {
           {analysis.pattern_identified && (
             <div style={{ marginBottom: '15px' }}>
               <div style={{ color: '#9ca3af', fontSize: '12px', marginBottom: '5px' }}>Pattern Identified</div>
-              <div style={{ color: '#fff', fontSize: '14px' }}>
+              <div style={{ color: '#e0e0e0', fontSize: '14px' }}>
                 {analysis.pattern_identified}
               </div>
             </div>
@@ -285,7 +278,7 @@ function VisionAnalyzer() {
           {analysis.chart_observations && (
             <div style={{ marginBottom: '15px' }}>
               <div style={{ color: '#9ca3af', fontSize: '12px', marginBottom: '5px' }}>Chart Observations</div>
-              <div style={{ color: '#fff', fontSize: '14px', lineHeight: '1.6' }}>
+              <div style={{ color: '#e0e0e0', fontSize: '14px', lineHeight: '1.6' }}>
                 {analysis.chart_observations}
               </div>
             </div>
@@ -293,13 +286,13 @@ function VisionAnalyzer() {
 
           {analysis.reasoning && (
             <div style={{
-              background: '#1a1a1a',
+              background: '#1a1f3a',
               padding: '15px',
-              borderRadius: '4px',
+              borderRadius: '5px',
               marginTop: '15px'
             }}>
               <div style={{ color: '#9ca3af', fontSize: '12px', marginBottom: '5px' }}>AI Reasoning</div>
-              <div style={{ color: '#fff', fontSize: '14px', lineHeight: '1.6' }}>
+              <div style={{ color: '#e0e0e0', fontSize: '14px', lineHeight: '1.6' }}>
                 {analysis.reasoning}
               </div>
             </div>

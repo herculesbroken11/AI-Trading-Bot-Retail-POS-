@@ -161,10 +161,22 @@ def get_watchlist():
     """
     try:
         import os
-        watchlist_str = os.getenv("TRADING_WATCHLIST", "AAPL,MSFT,GOOGL,TSLA,NVDA")
+        from dotenv import load_dotenv
+        
+        # Ensure .env is loaded (in case it wasn't loaded at startup)
+        load_dotenv()
+        
+        watchlist_str = os.getenv("TRADING_WATCHLIST", "")
+        
+        if not watchlist_str:
+            logger.warning("TRADING_WATCHLIST not found in environment, using empty list")
+            return jsonify({
+                "watchlist": []
+            }), 200
+        
         watchlist = [s.strip().upper() for s in watchlist_str.split(",") if s.strip()]
         
-        logger.info(f"Watchlist loaded from env: {watchlist}")
+        logger.info(f"Watchlist loaded from TRADING_WATCHLIST env: {watchlist}")
         return jsonify({
             "watchlist": watchlist
         }), 200
@@ -173,7 +185,7 @@ def get_watchlist():
         logger.error(f"Failed to get watchlist: {e}")
         return jsonify({
             "error": str(e),
-            "watchlist": ["AAPL", "MSFT", "GOOGL", "TSLA", "NVDA"]  # Fallback
+            "watchlist": []
         }), 500
 
 @charts_bp.route('/setup/<symbol>', methods=['GET'])

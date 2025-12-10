@@ -13,11 +13,13 @@ import RulesVerification from './components/RulesVerification'
 import ActivityLog from './components/ActivityLog'
 import MarketAnalysisStatus from './components/MarketAnalysisStatus'
 import VisionAnalyzer from './components/VisionAnalyzer'
+import RealTimeChart from './components/RealTimeChart'
 import { getAccountId } from './services/api'
 
 function App() {
   const [accountId, setAccountId] = useState(null)
   const [lastUpdate, setLastUpdate] = useState(null)
+  const [selectedSymbol, setSelectedSymbol] = useState('AAPL')
 
   useEffect(() => {
     // Get account ID on mount
@@ -48,6 +50,8 @@ function App() {
       </div>
 
       <VisionAnalyzer />
+
+      <RealTimeChart symbol={selectedSymbol} lastUpdate={lastUpdate} />
 
       <PositionsTable lastUpdate={lastUpdate} />
 

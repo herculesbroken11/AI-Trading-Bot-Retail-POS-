@@ -151,6 +151,31 @@ def get_chart_data(symbol: str):
         logger.error(f"Failed to get chart data for {symbol}: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
+@charts_bp.route('/watchlist', methods=['GET'])
+def get_watchlist():
+    """
+    Get trading watchlist from TRADING_WATCHLIST environment variable.
+    
+    Returns:
+        JSON with watchlist array
+    """
+    try:
+        import os
+        watchlist_str = os.getenv("TRADING_WATCHLIST", "AAPL,MSFT,GOOGL,TSLA,NVDA")
+        watchlist = [s.strip().upper() for s in watchlist_str.split(",") if s.strip()]
+        
+        logger.info(f"Watchlist loaded from env: {watchlist}")
+        return jsonify({
+            "watchlist": watchlist
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Failed to get watchlist: {e}")
+        return jsonify({
+            "error": str(e),
+            "watchlist": ["AAPL", "MSFT", "GOOGL", "TSLA", "NVDA"]  # Fallback
+        }), 500
+
 @charts_bp.route('/setup/<symbol>', methods=['GET'])
 def get_chart_with_setup(symbol: str):
     """

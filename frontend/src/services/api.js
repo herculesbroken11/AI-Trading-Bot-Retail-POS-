@@ -97,6 +97,10 @@ export async function getRulesStatus() {
   return fetchJSON(`${API_BASE}/activity/rules/status`)
 }
 
+export async function getWatchlist() {
+  return fetchJSON(`${API_BASE}/charts/watchlist`)
+}
+
 export async function getChartData(symbol, timeframe = '1min') {
   // Parse timeframe
   // Note: Schwab API only accepts [1, 5, 10, 15, 30] for minute frequency

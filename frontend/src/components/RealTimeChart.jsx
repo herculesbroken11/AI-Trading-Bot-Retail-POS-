@@ -12,7 +12,7 @@ import {
   Filler
 } from 'chart.js'
 import { Line, Bar } from 'react-chartjs-2'
-import { getAutomationStatus } from '../services/api'
+import { getAutomationStatus, getWatchlist } from '../services/api'
 import './Card.css'
 
 // Register Chart.js components
@@ -62,6 +62,22 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate }) {
 
   const loadWatchlist = async () => {
     try {
+      // First try to get watchlist directly from charts endpoint (reads TRADING_WATCHLIST env)
+      try {
+        const watchlistData = await getWatchlist()
+        if (watchlistData && watchlistData.watchlist && watchlistData.watchlist.length > 0) {
+          setWatchlist(watchlistData.watchlist)
+          // Set first symbol from watchlist if no symbol provided
+          if (!propSymbol && watchlistData.watchlist.length > 0) {
+            setSelectedSymbol(watchlistData.watchlist[0])
+          }
+          return
+        }
+      } catch (watchlistError) {
+        console.warn('Failed to load watchlist from charts endpoint, trying automation status:', watchlistError)
+      }
+      
+      // Fallback: try automation status (uses scheduler's watchlist)
       const status = await getAutomationStatus()
       if (status && status.watchlist && status.watchlist.length > 0) {
         setWatchlist(status.watchlist)
@@ -70,7 +86,7 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate }) {
           setSelectedSymbol(status.watchlist[0])
         }
       } else {
-        // Fallback to default watchlist
+        // Final fallback to default watchlist
         const defaultWatchlist = ['AAPL', 'MSFT', 'GOOGL', 'TSLA', 'NVDA']
         setWatchlist(defaultWatchlist)
         if (!propSymbol) {
@@ -79,7 +95,7 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate }) {
       }
     } catch (error) {
       console.error('Failed to load watchlist:', error)
-      // Fallback to default
+      // Final fallback to default
       const defaultWatchlist = ['AAPL', 'MSFT', 'GOOGL', 'TSLA', 'NVDA']
       setWatchlist(defaultWatchlist)
       if (!propSymbol) {

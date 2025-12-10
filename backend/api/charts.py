@@ -80,7 +80,17 @@ def get_chart_data(symbol: str):
             df['datetime'] = pd.to_datetime(df['time'], unit='ms')
             df = df.rename(columns={'time': 'datetime'})
         
-        # Filter data to show only from 8:00 AM ET to 4:10 PM ET
+        # Ensure numeric types BEFORE calculating indicators
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        # Calculate indicators using OV engine on FULL dataset FIRST
+        # This ensures SMA200 has enough historical data (200+ candles) to calculate properly
+        # We need to calculate on the full dataset, then filter to show only 8 AM - 4:10 PM
+        df = ov_engine.calculate_indicators(df)
+        
+        # Now filter data to show only from 8:00 AM ET to 4:10 PM ET
         # Convert to ET timezone and filter
         import pytz
         et = pytz.timezone('US/Eastern')
@@ -99,14 +109,6 @@ def get_chart_data(symbol: str):
         
         if len(df) == 0:
             return jsonify({"error": "No data available between 8:00 AM ET and 4:10 PM ET"}), 404
-        
-        # Ensure numeric types
-        for col in ['open', 'high', 'low', 'close', 'volume']:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-        
-        # Calculate indicators using OV engine
-        df = ov_engine.calculate_indicators(df)
         
         # Convert to chart-friendly format
         chart_data = {

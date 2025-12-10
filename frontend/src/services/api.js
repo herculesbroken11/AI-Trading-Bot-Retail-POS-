@@ -104,16 +104,18 @@ export async function getWatchlist() {
 export async function getChartData(symbol, timeframe = '1min') {
   // Parse timeframe
   // Note: Schwab API only accepts [1, 5, 10, 15, 30] for minute frequency
+  // Request 5 days of data to ensure we have enough historical data for SMA200 calculation
+  // The backend will filter to show only 8 AM - 4:10 PM ET
   const [periodValue, periodType, frequency] = (() => {
     switch (timeframe) {
-      case '1min': return [1, 'day', 1]
-      case '2min': return [1, 'day', 1]  // 2min not supported, use 1min instead
-      case '5min': return [1, 'day', 5]
-      case '15min': return [1, 'day', 15]
-      case '30min': return [1, 'day', 30]
+      case '1min': return [5, 'day', 1]  // Request 5 days for enough data
+      case '2min': return [5, 'day', 1]  // 2min not supported, use 1min instead, request 5 days
+      case '5min': return [5, 'day', 5]  // Request 5 days
+      case '15min': return [5, 'day', 15]  // Request 5 days
+      case '30min': return [5, 'day', 30]  // Request 5 days
       case '1hour': return [5, 'day', 60]
       case '1day': return [1, 'month', 1]
-      default: return [1, 'day', 1]  // Default to 1min (valid)
+      default: return [5, 'day', 1]  // Default to 5 days for enough data
     }
   })()
   

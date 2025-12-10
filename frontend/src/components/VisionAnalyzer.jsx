@@ -160,7 +160,6 @@ function VisionAnalyzer() {
               fontSize: '14px',
               fontWeight: 'bold'
             }}
-            disabled={loading || (!file && !imageUrl)}
           >
             {loading ? 'Analyzing...' : '🔍 Analyze Chart'}
           </button>

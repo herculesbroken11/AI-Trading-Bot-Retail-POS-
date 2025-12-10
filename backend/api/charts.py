@@ -80,6 +80,26 @@ def get_chart_data(symbol: str):
             df['datetime'] = pd.to_datetime(df['time'], unit='ms')
             df = df.rename(columns={'time': 'datetime'})
         
+        # Filter data to show only from 8:00 AM ET to 4:10 PM ET
+        # Convert to ET timezone and filter
+        import pytz
+        et = pytz.timezone('US/Eastern')
+        # Handle both timezone-aware and naive datetimes
+        if df['datetime'].dt.tz is None:
+            df['datetime_et'] = df['datetime'].dt.tz_localize('UTC').dt.tz_convert(et)
+        else:
+            df['datetime_et'] = df['datetime'].dt.tz_convert(et)
+        
+        # Filter to only include data from 8:00 AM ET to 4:10 PM ET
+        # This includes premarket (8:00 AM - 9:30 AM) and regular trading hours (9:30 AM - 4:00 PM) + 10 min buffer
+        df = df[
+            (df['datetime_et'].dt.hour >= 8) & 
+            ((df['datetime_et'].dt.hour < 16) | ((df['datetime_et'].dt.hour == 16) & (df['datetime_et'].dt.minute <= 10)))
+        ].copy()
+        
+        if len(df) == 0:
+            return jsonify({"error": "No data available between 8:00 AM ET and 4:10 PM ET"}), 404
+        
         # Ensure numeric types
         for col in ['open', 'high', 'low', 'close', 'volume']:
             if col in df.columns:

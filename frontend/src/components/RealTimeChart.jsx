@@ -28,11 +28,11 @@ ChartJS.register(
   Filler
 )
 
-function RealTimeChart({ symbol: propSymbol, lastUpdate }) {
+function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimeframe, compact = false }) {
   const [chartData, setChartData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-  const [timeframe, setTimeframe] = useState('1min')
+  const [timeframe, setTimeframe] = useState(propTimeframe || '2min')
   const [selectedSymbol, setSelectedSymbol] = useState(propSymbol || '')
   const [watchlist, setWatchlist] = useState([])
   const [showIndicators, setShowIndicators] = useState({
@@ -53,6 +53,12 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate }) {
       setSelectedSymbol(propSymbol)
     }
   }, [propSymbol])
+
+  useEffect(() => {
+    if (propTimeframe && propTimeframe !== timeframe) {
+      setTimeframe(propTimeframe)
+    }
+  }, [propTimeframe])
 
   useEffect(() => {
     if (selectedSymbol) {
@@ -153,10 +159,10 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate }) {
       c: c.close
     }))
 
-    // Get moving averages
-    const mm8 = showIndicators.mm8 ? chartData.indicators?.sma_8?.map(i => ({ x: i.time, y: i.value })) : []
-    const mm20 = showIndicators.mm20 ? chartData.indicators?.sma_20?.map(i => ({ x: i.time, y: i.value })) : []
-    const mm200 = showIndicators.mm200 ? chartData.indicators?.sma_200?.map(i => ({ x: i.time, y: i.value })) : []
+    // Get moving averages - Always calculate for all timeframes
+    const mm8 = chartData.indicators?.sma_8?.map(i => ({ x: i.time, y: i.value })) || []
+    const mm20 = chartData.indicators?.sma_20?.map(i => ({ x: i.time, y: i.value })) || []
+    const mm200 = chartData.indicators?.sma_200?.map(i => ({ x: i.time, y: i.value })) || []
 
     // Store candlestick data for custom rendering
     const datasets = [
@@ -174,42 +180,42 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate }) {
       }
     ]
 
-    // Add MM8 (red line - fast)
-    if (showIndicators.mm8 && mm8.length > 0) {
+    // Add MM8 (red line - fast) - Always show on all timeframes
+    if (mm8.length > 0) {
       datasets.push({
         label: 'MM8',
         data: mm8,
         borderColor: '#ef4444',  // Red
         backgroundColor: 'transparent',
-        borderWidth: 1.5,
+        borderWidth: 2,  // Increased for better visibility
         pointRadius: 0,
         fill: false,
         yAxisID: 'y'
       })
     }
 
-    // Add MM20 (yellow/gold line - medium)
-    if (showIndicators.mm20 && mm20.length > 0) {
+    // Add MM20 (yellow/gold line - medium) - Always show on all timeframes
+    if (mm20.length > 0) {
       datasets.push({
         label: 'MM20',
         data: mm20,
         borderColor: '#f59e0b',  // Yellow/Gold
         backgroundColor: 'transparent',
-        borderWidth: 1.5,
+        borderWidth: 2,  // Increased for better visibility
         pointRadius: 0,
         fill: false,
         yAxisID: 'y'
       })
     }
 
-    // Add MM200 (blue line - slow)
-    if (showIndicators.mm200 && mm200.length > 0) {
+    // Add MM200 (blue line - slow) - Always show on all timeframes
+    if (mm200.length > 0) {
       datasets.push({
         label: 'MM200',
         data: mm200,
         borderColor: '#3b82f6',  // Blue
         backgroundColor: 'transparent',
-        borderWidth: 2,
+        borderWidth: 2.5,  // Slightly thicker for long-term trend
         pointRadius: 0,
         fill: false,
         yAxisID: 'y'
@@ -354,92 +360,75 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate }) {
   const volumeData = prepareVolumeData()
 
   return (
-    <div className="card">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '10px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-          <h2 style={{ margin: 0 }}>Real-Time Chart:</h2>
-          {watchlist.length > 0 && (
+    <div className="card" style={compact ? { padding: '15px' } : {}}>
+      {!compact && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <h2 style={{ margin: 0 }}>Real-Time Chart:</h2>
+            {watchlist.length > 0 && (
+              <select
+                value={selectedSymbol}
+                onChange={(e) => setSelectedSymbol(e.target.value)}
+                style={{
+                  padding: '8px 12px',
+                  background: '#2a2f4a',
+                  border: '1px solid #2a2f4a',
+                  borderRadius: '5px',
+                  color: '#e0e0e0',
+                  fontSize: '14px',
+                  fontWeight: 'bold'
+                }}
+              >
+                {watchlist.map(sym => (
+                  <option key={sym} value={sym}>{sym}</option>
+                ))}
+              </select>
+            )}
+            {watchlist.length === 0 && (
+              <span style={{ color: '#667eea', fontWeight: 'bold' }}>{selectedSymbol}</span>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
             <select
-              value={selectedSymbol}
-              onChange={(e) => setSelectedSymbol(e.target.value)}
+              value={timeframe}
+              onChange={(e) => setTimeframe(e.target.value)}
               style={{
                 padding: '8px 12px',
                 background: '#2a2f4a',
                 border: '1px solid #2a2f4a',
                 borderRadius: '5px',
                 color: '#e0e0e0',
-                fontSize: '14px',
-                fontWeight: 'bold'
+                fontSize: '14px'
               }}
             >
-              {watchlist.map(sym => (
-                <option key={sym} value={sym}>{sym}</option>
-              ))}
+              <option value="2min">2 Min</option>
+              <option value="5min">5 Min</option>
+              <option value="15min">15 Min</option>
             </select>
-          )}
-          {watchlist.length === 0 && (
-            <span style={{ color: '#667eea', fontWeight: 'bold' }}>{selectedSymbol}</span>
-          )}
+            <button
+              onClick={loadChartData}
+              disabled={loading}
+              className="btn"
+              style={{ padding: '8px 16px' }}
+            >
+              {loading ? 'Loading...' : 'Refresh'}
+            </button>
+          </div>
         </div>
-        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-          <select
-            value={timeframe}
-            onChange={(e) => setTimeframe(e.target.value)}
-            style={{
-              padding: '8px 12px',
-              background: '#2a2f4a',
-              border: '1px solid #2a2f4a',
-              borderRadius: '5px',
-              color: '#e0e0e0',
-              fontSize: '14px'
-            }}
-          >
-            <option value="1min">1 Min</option>
-            <option value="5min">5 Min</option>
-            <option value="15min">15 Min</option>
-            <option value="30min">30 Min</option>
-            <option value="1hour">1 Hour</option>
-            <option value="1day">1 Day</option>
-          </select>
-          <button
-            onClick={loadChartData}
-            disabled={loading}
-            className="btn"
-            style={{ padding: '8px 16px' }}
-          >
-            {loading ? 'Loading...' : 'Refresh'}
-          </button>
+      )}
+      {compact && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+          <h3 style={{ margin: 0, fontSize: '16px' }}>{selectedSymbol}</h3>
+          <span style={{ color: '#9ca3af', fontSize: '12px' }}>{timeframe}</span>
         </div>
-      </div>
+      )}
 
-      <div style={{ marginBottom: '15px', display: 'flex', gap: '15px', flexWrap: 'wrap' }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#9ca3af', fontSize: '14px' }}>
-          <input
-            type="checkbox"
-            checked={showIndicators.mm8}
-            onChange={(e) => setShowIndicators({ ...showIndicators, mm8: e.target.checked })}
-            style={{ marginRight: '5px' }}
-          />
-          <span style={{ color: '#ef4444' }}>MM8</span>
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#9ca3af', fontSize: '14px' }}>
-          <input
-            type="checkbox"
-            checked={showIndicators.mm20}
-            onChange={(e) => setShowIndicators({ ...showIndicators, mm20: e.target.checked })}
-            style={{ marginRight: '5px' }}
-          />
-          <span style={{ color: '#f59e0b' }}>MM20</span>
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#9ca3af', fontSize: '14px' }}>
-          <input
-            type="checkbox"
-            checked={showIndicators.mm200}
-            onChange={(e) => setShowIndicators({ ...showIndicators, mm200: e.target.checked })}
-            style={{ marginRight: '5px' }}
-          />
-          <span style={{ color: '#3b82f6' }}>MM200</span>
-        </label>
+      <div style={{ marginBottom: '15px', display: 'flex', gap: '15px', flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
+          <span style={{ color: '#ef4444', fontWeight: 'bold' }}>● MM8</span>
+          <span style={{ color: '#f59e0b', fontWeight: 'bold' }}>● MM20</span>
+          <span style={{ color: '#3b82f6', fontWeight: 'bold' }}>● MM200</span>
+        </div>
         <label style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#9ca3af', fontSize: '14px' }}>
           <input
             type="checkbox"
@@ -472,7 +461,7 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate }) {
 
       {candlestickData && !loading && (
         <div>
-          <div style={{ height: '500px', marginBottom: '20px', background: '#0f0f0f', borderRadius: '5px', padding: '10px' }}>
+          <div style={{ height: compact ? '300px' : '500px', marginBottom: compact ? '10px' : '20px', background: '#0f0f0f', borderRadius: '5px', padding: '10px' }}>
             <Line 
               data={candlestickData} 
               options={chartOptions}
@@ -501,25 +490,29 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate }) {
                     const yLow = yScale.getPixelForValue(candle.l)
                     
                     const isUp = candle.c >= candle.o
-                    const color = isUp ? '#10b981' : '#ef4444'
+                    // Use brighter, more visible colors for candles
+                    const color = isUp ? '#22c55e' : '#f87171'  // Brighter green/red
+                    const borderColor = isUp ? '#16a34a' : '#dc2626'  // Darker border
                     
-                    // Draw wick (high-low line)
+                    // Draw wick (high-low line) - make it thicker and more visible
                     ctx.strokeStyle = color
-                    ctx.lineWidth = 1
+                    ctx.lineWidth = 2  // Increased from 1
                     ctx.beginPath()
                     ctx.moveTo(x, yHigh)
                     ctx.lineTo(x, yLow)
                     ctx.stroke()
                     
-                    // Draw body (open-close rectangle)
+                    // Draw body (open-close rectangle) - make it wider and more visible
                     const bodyTop = Math.min(yOpen, yClose)
                     const bodyBottom = Math.max(yOpen, yClose)
-                    const bodyHeight = Math.max(bodyBottom - bodyTop, 1)
-                    const bodyWidth = 6
+                    const bodyHeight = Math.max(bodyBottom - bodyTop, 2)  // Minimum 2px height
+                    const bodyWidth = 10  // Increased from 6 to 10 for better visibility
                     
                     ctx.fillStyle = color
                     ctx.fillRect(x - bodyWidth/2, bodyTop, bodyWidth, bodyHeight)
-                    ctx.strokeStyle = color
+                    // Add border for better definition
+                    ctx.strokeStyle = borderColor
+                    ctx.lineWidth = 1.5
                     ctx.strokeRect(x - bodyWidth/2, bodyTop, bodyWidth, bodyHeight)
                   })
                 }
@@ -528,20 +521,20 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate }) {
           </div>
 
           {showIndicators.volume && volumeData && (
-            <div style={{ height: '150px', marginBottom: '20px' }}>
+            <div style={{ height: compact ? '100px' : '150px', marginBottom: compact ? '10px' : '20px' }}>
               <Bar data={volumeData} options={volumeOptions} />
             </div>
           )}
         </div>
       )}
 
-      {chartData && (
+      {chartData && !compact && (
         <div style={{ marginTop: '15px', padding: '10px', background: '#2a2f4a', borderRadius: '5px', fontSize: '12px', color: '#9ca3af' }}>
           Last update: {new Date(chartData.metadata.last_update).toLocaleString()} | 
           Candles: {chartData.metadata.total_candles} | 
           Period: {chartData.metadata.period_type} | 
           Frequency: {chartData.metadata.frequency}min | 
-          Premarket: Included
+          Hours: 8:00 AM - 4:10 PM ET
         </div>
       )}
     </div>

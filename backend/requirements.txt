@@ -9,4 +9,5 @@ flask-cors==4.0.0
 schedule==1.2.0
 gunicorn==21.2.0
 matplotlib>=3.7.0
+pytz==2024.1
 

@@ -13,7 +13,6 @@ import {
 } from 'chart.js'
 import { Line, Bar } from 'react-chartjs-2'
 import { getAutomationStatus } from '../services/api'
-import 'chartjs-adapter-date-fns'
 import './Card.css'
 
 // Register Chart.js components
@@ -296,13 +295,7 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate }) {
     },
     scales: {
       x: {
-        type: 'time',
-        time: {
-          unit: 'minute',
-          displayFormats: {
-            minute: 'HH:mm'
-          }
-        },
+        type: 'category',  // Use category instead of time for now
         ticks: {
           color: '#9ca3af',
           maxTicksLimit: 12

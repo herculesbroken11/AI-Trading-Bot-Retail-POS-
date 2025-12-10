@@ -57,9 +57,12 @@ class TradingScheduler:
         return self.ai_analyzer
         
     def _load_watchlist(self) -> List[str]:
-        """Load trading watchlist from environment or file."""
-        watchlist_str = os.getenv("TRADING_WATCHLIST", "AAPL,MSFT,GOOGL,TSLA,NVDA")
-        return [s.strip().upper() for s in watchlist_str.split(",")]
+        """Load trading watchlist from environment variable."""
+        watchlist_str = os.getenv("TRADING_WATCHLIST", "")
+        if not watchlist_str:
+            logger.warning("TRADING_WATCHLIST not found in environment. Watchlist will be empty.")
+            return []
+        return [s.strip().upper() for s in watchlist_str.split(",") if s.strip()]
     
     def is_market_hours(self) -> bool:
         """

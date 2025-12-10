@@ -102,11 +102,13 @@ def optimize_parameters():
             watchlist = scheduler.watchlist
         else:
             # Fallback to environment variable
-            watchlist_str = os.getenv("TRADING_WATCHLIST", "AAPL,MSFT,GOOGL,TSLA,NVDA")
+            watchlist_str = os.getenv("TRADING_WATCHLIST", "")
+            if not watchlist_str:
+                return jsonify({"error": "TRADING_WATCHLIST not found in environment. Please set it in .env file."}), 400
             watchlist = [s.strip().upper() for s in watchlist_str.split(",") if s.strip()]
         
         if not watchlist:
-            return jsonify({"error": "No symbols in watchlist"}), 400
+            return jsonify({"error": "TRADING_WATCHLIST is empty. Please set it in .env file."}), 400
         
         # Get recent prices for volatility calculation
         from api.quotes import SCHWAB_HISTORICAL_URL

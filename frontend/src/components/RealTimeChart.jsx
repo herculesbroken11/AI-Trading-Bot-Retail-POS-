@@ -33,7 +33,7 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [timeframe, setTimeframe] = useState('1min')
-  const [selectedSymbol, setSelectedSymbol] = useState(propSymbol || 'AAPL')
+  const [selectedSymbol, setSelectedSymbol] = useState(propSymbol || '')
   const [watchlist, setWatchlist] = useState([])
   const [showIndicators, setShowIndicators] = useState({
     mm8: true,
@@ -72,22 +72,14 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate }) {
           setSelectedSymbol(watchlistData.watchlist[0])
         }
       } else {
-        console.warn('Watchlist is empty, using fallback')
-        // Fallback to default watchlist only if API returns empty
-        const defaultWatchlist = ['AAPL', 'MSFT', 'GOOGL', 'TSLA', 'NVDA']
-        setWatchlist(defaultWatchlist)
-        if (!propSymbol) {
-          setSelectedSymbol(defaultWatchlist[0])
-        }
+        console.error('TRADING_WATCHLIST is empty or not configured. Please set TRADING_WATCHLIST in .env file.')
+        setError('No watchlist configured. Please set TRADING_WATCHLIST in .env file.')
+        setWatchlist([])
       }
     } catch (error) {
       console.error('Failed to load watchlist from /charts/watchlist:', error)
-      // Only use fallback if API call completely fails
-      const defaultWatchlist = ['AAPL', 'MSFT', 'GOOGL', 'TSLA', 'NVDA']
-      setWatchlist(defaultWatchlist)
-      if (!propSymbol) {
-        setSelectedSymbol(defaultWatchlist[0])
-      }
+      setError(`Failed to load watchlist: ${error.message}. Please ensure TRADING_WATCHLIST is set in .env file.`)
+      setWatchlist([])
     }
   }
 

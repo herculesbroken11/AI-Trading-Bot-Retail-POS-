@@ -33,7 +33,7 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate }) {
   const [chartData, setChartData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-  const [timeframe, setTimeframe] = useState('2min')
+  const [timeframe, setTimeframe] = useState('1min')
   const [selectedSymbol, setSelectedSymbol] = useState(propSymbol || 'AAPL')
   const [watchlist, setWatchlist] = useState([])
   const [showIndicators, setShowIndicators] = useState({
@@ -119,11 +119,13 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate }) {
 
   const parseTimeframe = (tf) => {
     // Returns [periodValue, periodType, frequency]
+    // Note: Schwab API only accepts [1, 5, 10, 15, 30] for minute frequency
     switch (tf) {
       case '1min':
         return [1, 'day', 1]
       case '2min':
-        return [1, 'day', 2]
+        // 2min not supported, use 1min instead
+        return [1, 'day', 1]
       case '5min':
         return [1, 'day', 5]
       case '15min':
@@ -135,7 +137,7 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate }) {
       case '1day':
         return [1, 'month', 1]
       default:
-        return [1, 'day', 2]
+        return [1, 'day', 1]  // Default to 1min (valid)
     }
   }
 
@@ -405,7 +407,6 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate }) {
             }}
           >
             <option value="1min">1 Min</option>
-            <option value="2min">2 Min</option>
             <option value="5min">5 Min</option>
             <option value="15min">15 Min</option>
             <option value="30min">30 Min</option>

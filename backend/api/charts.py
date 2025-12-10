@@ -38,16 +38,25 @@ def get_chart_data(symbol: str):
         period_type = request.args.get('periodType', 'day')
         period_value = int(request.args.get('periodValue', 1))
         frequency_type = request.args.get('frequencyType', 'minute')
-        frequency = int(request.args.get('frequency', 5))
+        frequency = int(request.args.get('frequency', 1))
         
-        # Build Schwab API request
-        params = {
-            'symbol': symbol.upper(),
-            'periodType': period_type,
-            'period': period_value,
-            'frequencyType': frequency_type,
-            'frequency': frequency
-        }
+        # Validate frequency for minute type
+        # Schwab API only accepts [1, 5, 10, 15, 30] for minute frequency
+        if frequency_type == 'minute' and frequency not in [1, 5, 10, 15, 30]:
+            # Map invalid frequencies to closest valid one
+            if frequency == 2:
+                frequency = 1  # Map 2min to 1min
+            elif frequency < 5:
+                frequency = 1
+            elif frequency < 10:
+                frequency = 5
+            elif frequency < 15:
+                frequency = 10
+            elif frequency < 30:
+                frequency = 15
+            else:
+                frequency = 30
+            logger.warning(f"Invalid frequency {request.args.get('frequency')} for minute type, using {frequency} instead")
         
         # Request historical data from Schwab (include premarket/extended hours)
         url = f"{SCHWAB_HISTORICAL_URL}?symbol={symbol.upper()}&periodType={period_type}&period={period_value}&frequencyType={frequency_type}&frequency={frequency}&needExtendedHoursData=true"

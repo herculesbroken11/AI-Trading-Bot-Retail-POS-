@@ -97,17 +97,19 @@ export async function getRulesStatus() {
   return fetchJSON(`${API_BASE}/activity/rules/status`)
 }
 
-export async function getChartData(symbol, timeframe = '5min') {
+export async function getChartData(symbol, timeframe = '1min') {
   // Parse timeframe
+  // Note: Schwab API only accepts [1, 5, 10, 15, 30] for minute frequency
   const [periodValue, periodType, frequency] = (() => {
     switch (timeframe) {
       case '1min': return [1, 'day', 1]
+      case '2min': return [1, 'day', 1]  // 2min not supported, use 1min instead
       case '5min': return [1, 'day', 5]
       case '15min': return [1, 'day', 15]
       case '30min': return [1, 'day', 30]
       case '1hour': return [5, 'day', 60]
       case '1day': return [1, 'month', 1]
-      default: return [1, 'day', 5]
+      default: return [1, 'day', 1]  // Default to 1min (valid)
     }
   })()
   

@@ -124,23 +124,34 @@ def get_chart_data(symbol: str):
         else:
             df['datetime_et'] = df['datetime'].dt.tz_convert(et)
         
-        # Get today's date in ET timezone
+        # Get current time in ET timezone
         now_et = datetime.now(et)
-        today_et = now_et.date()
+        current_hour = now_et.hour
         
-        # Also get today's start and end times in ET
-        today_start_et = et.localize(datetime.combine(today_et, datetime.min.time().replace(hour=8, minute=0)))
-        today_end_et = et.localize(datetime.combine(today_et, datetime.min.time().replace(hour=16, minute=10)))
+        # If before 8 AM ET, show yesterday's data (8 AM - 4:10 PM)
+        # Otherwise, show today's data (8 AM - 4:10 PM)
+        if current_hour < 8:
+            # Before 8 AM, use yesterday
+            target_date = (now_et - timedelta(days=1)).date()
+            date_label = "yesterday"
+        else:
+            # 8 AM or later, use today
+            target_date = now_et.date()
+            date_label = "today"
         
-        logger.info(f"Filtering data for today ({today_et}) from 8:00 AM to 4:10 PM ET. Total candles before filtering: {len(df)}")
-        logger.info(f"Date range: {today_start_et} to {today_end_et}")
+        # Get target date's start and end times in ET
+        target_start_et = et.localize(datetime.combine(target_date, datetime.min.time().replace(hour=8, minute=0)))
+        target_end_et = et.localize(datetime.combine(target_date, datetime.min.time().replace(hour=16, minute=10)))
         
-        # Filter to only include TODAY's data from 8:00 AM ET to 4:10 PM ET
+        logger.info(f"Current time: {now_et} ({now_et.hour}:{now_et.minute:02d} ET). Filtering data for {date_label} ({target_date}) from 8:00 AM to 4:10 PM ET. Total candles before filtering: {len(df)}")
+        logger.info(f"Date range: {target_start_et} to {target_end_et}")
+        
+        # Filter to only include target date's data from 8:00 AM ET to 4:10 PM ET
         # This includes premarket (8:00 AM - 9:30 AM) and regular trading hours (9:30 AM - 4:00 PM) + 10 min buffer
         # Use timestamp comparison for more reliable filtering
         df_filtered = df[
-            (df['datetime_et'] >= today_start_et) &
-            (df['datetime_et'] <= today_end_et)
+            (df['datetime_et'] >= target_start_et) &
+            (df['datetime_et'] <= target_end_et)
         ].copy()
         
         # Log date range of filtered data
@@ -150,14 +161,14 @@ def get_chart_data(symbol: str):
             unique_dates = df_filtered['datetime_et'].dt.date.unique()
             logger.info(f"Filtered data: {len(df_filtered)} candles from {min_date} to {max_date}. Unique dates: {unique_dates}")
         else:
-            # If no data for today, check what dates we have
+            # If no data for target date, check what dates we have
             if len(df) > 0:
                 unique_dates = df['datetime_et'].dt.date.unique()
                 date_range = (df['datetime_et'].min(), df['datetime_et'].max())
-                logger.warning(f"No data for today ({today_et}). Available dates: {unique_dates}, Date range: {date_range}")
+                logger.warning(f"No data for {date_label} ({target_date}). Available dates: {unique_dates}, Date range: {date_range}")
         
         if len(df_filtered) == 0:
-            return jsonify({"error": f"No data available for today ({today_et}) between 8:00 AM ET and 4:10 PM ET"}), 404
+            return jsonify({"error": f"No data available for {date_label} ({target_date}) between 8:00 AM ET and 4:10 PM ET"}), 404
         
         # Use filtered dataframe
         df = df_filtered

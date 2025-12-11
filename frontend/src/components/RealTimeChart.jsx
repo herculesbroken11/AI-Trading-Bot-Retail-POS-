@@ -54,39 +54,57 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
   useEffect(() => {
     if (!chartContainerRef.current) return
 
-    // Create chart instance
-    const chart = createChart(chartContainerRef.current, {
-      layout: {
-        background: { type: ColorType.Solid, color: '#0f0f0f' },
-        textColor: '#9ca3af',
-      },
-      grid: {
-        vertLines: { color: '#2a2f4a' },
-        horzLines: { color: '#2a2f4a' },
-      },
-      crosshair: {
-        mode: CrosshairMode.Normal,
-      },
-      rightPriceScale: {
-        borderColor: '#2a2f4a',
-        scaleMargins: {
-          top: 0.1,
-          bottom: 0.1,
+    // Wait for container to have a width
+    const initChart = () => {
+      if (!chartContainerRef.current) return
+      
+      const containerWidth = chartContainerRef.current.clientWidth
+      if (containerWidth === 0) {
+        // Container not ready yet, try again
+        setTimeout(initChart, 100)
+        return
+      }
+
+      // Remove existing chart if any
+      if (chartInstanceRef.current) {
+        chartInstanceRef.current.remove()
+        chartInstanceRef.current = null
+      }
+
+      // Create chart instance
+      const chart = createChart(chartContainerRef.current, {
+        layout: {
+          background: { type: ColorType.Solid, color: '#0f0f0f' },
+          textColor: '#9ca3af',
         },
-      },
-      timeScale: {
-        borderColor: '#2a2f4a',
-        timeVisible: true,
-        secondsVisible: false,
-      },
-      width: chartContainerRef.current.clientWidth,
-      height: compact ? 300 : 500,
-    })
+        grid: {
+          vertLines: { color: '#2a2f4a' },
+          horzLines: { color: '#2a2f4a' },
+        },
+        crosshair: {
+          mode: CrosshairMode.Normal,
+        },
+        rightPriceScale: {
+          borderColor: '#2a2f4a',
+          scaleMargins: {
+            top: 0.1,
+            bottom: 0.1,
+          },
+        },
+        timeScale: {
+          borderColor: '#2a2f4a',
+          timeVisible: true,
+          secondsVisible: false,
+        },
+        width: containerWidth,
+        height: compact ? 300 : 500,
+        autoSize: true,
+      })
 
-    chartInstanceRef.current = chart
+      chartInstanceRef.current = chart
 
-    // Create candlestick series with very clear, visible candles
-    const candlestickSeries = chart.addCandlestickSeries({
+      // Create candlestick series with very clear, visible candles
+      const candlestickSeries = chart.addCandlestickSeries({
       upColor: '#22c55e',      // Bright green for up candles
       downColor: '#f87171',   // Bright red for down candles
       borderVisible: true,
@@ -103,76 +121,85 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
     })
     candlestickSeriesRef.current = candlestickSeries
 
-    // Create MM8 line (red - fast)
-    const mm8Series = chart.addLineSeries({
-      color: '#ef4444',
-      lineWidth: 2,
-      title: 'MM8',
-      priceScaleId: 'right',
-      priceFormat: {
-        type: 'price',
-        precision: 2,
-        minMove: 0.01,
-      },
-    })
-    mm8SeriesRef.current = mm8Series
+      // Create MM8 line (red - fast)
+      const mm8Series = chart.addLineSeries({
+        color: '#ef4444',
+        lineWidth: 2,
+        title: 'MM8',
+        priceScaleId: 'right',
+        priceFormat: {
+          type: 'price',
+          precision: 2,
+          minMove: 0.01,
+        },
+      })
+      mm8SeriesRef.current = mm8Series
 
-    // Create MM20 line (yellow/gold - medium)
-    const mm20Series = chart.addLineSeries({
-      color: '#f59e0b',
-      lineWidth: 2,
-      title: 'MM20',
-      priceScaleId: 'right',
-      priceFormat: {
-        type: 'price',
-        precision: 2,
-        minMove: 0.01,
-      },
-    })
-    mm20SeriesRef.current = mm20Series
+      // Create MM20 line (yellow/gold - medium)
+      const mm20Series = chart.addLineSeries({
+        color: '#f59e0b',
+        lineWidth: 2,
+        title: 'MM20',
+        priceScaleId: 'right',
+        priceFormat: {
+          type: 'price',
+          precision: 2,
+          minMove: 0.01,
+        },
+      })
+      mm20SeriesRef.current = mm20Series
 
-    // Create MM200 line (blue - slow)
-    const mm200Series = chart.addLineSeries({
-      color: '#3b82f6',
-      lineWidth: 2.5,
-      title: 'MM200',
-      priceScaleId: 'right',
-      priceFormat: {
-        type: 'price',
-        precision: 2,
-        minMove: 0.01,
-      },
-    })
-    mm200SeriesRef.current = mm200Series
+      // Create MM200 line (blue - slow)
+      const mm200Series = chart.addLineSeries({
+        color: '#3b82f6',
+        lineWidth: 2.5,
+        title: 'MM200',
+        priceScaleId: 'right',
+        priceFormat: {
+          type: 'price',
+          precision: 2,
+          minMove: 0.01,
+        },
+      })
+      mm200SeriesRef.current = mm200Series
 
-    // Create volume histogram (overlay on main chart)
-    const volumeSeries = chart.addHistogramSeries({
-      color: '#667eea',
-      priceFormat: {
-        type: 'volume',
-      },
-      priceScaleId: 'volume',
-      scaleMargins: {
-        top: 0.85,
-        bottom: 0,
-      },
-    })
-    volumeSeriesRef.current = volumeSeries
+      // Create volume histogram (overlay on main chart)
+      const volumeSeries = chart.addHistogramSeries({
+        color: '#667eea',
+        priceFormat: {
+          type: 'volume',
+        },
+        priceScaleId: 'volume',
+        scaleMargins: {
+          top: 0.85,
+          bottom: 0,
+        },
+      })
+      volumeSeriesRef.current = volumeSeries
 
-    // Create volume price scale (right side, separate from price)
-    chart.priceScale('volume').applyOptions({
-      scaleMargins: {
-        top: 0.85,
-        bottom: 0,
-      },
-    })
+      // Create volume price scale (right side, separate from price)
+      chart.priceScale('volume').applyOptions({
+        scaleMargins: {
+          top: 0.85,
+          bottom: 0,
+        },
+      })
+
+      // Note: Data will be set via useEffect when chartData changes
+    }
+
+    // Initialize chart
+    initChart()
 
     // Handle resize
     const handleResize = () => {
       if (chartContainerRef.current && chartInstanceRef.current) {
-        chartInstanceRef.current.applyOptions({
-          width: chartContainerRef.current.clientWidth,
-        })
+        const containerWidth = chartContainerRef.current.clientWidth
+        if (containerWidth > 0) {
+          chartInstanceRef.current.applyOptions({
+            width: containerWidth,
+          })
+        }
       }
     }
 
@@ -185,14 +212,14 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
         chartInstanceRef.current = null
       }
     }
-  }, [])
+  }, [compact])
 
-  // Update chart data when chartData changes
-  useEffect(() => {
-    if (!chartData || !chartInstanceRef.current) return
+  // Function to update chart data
+  const updateChartData = (data) => {
+    if (!data || !chartInstanceRef.current) return
 
-    const candles = chartData.candles || []
-    const indicators = chartData.indicators || {}
+    const candles = data.candles || []
+    const indicators = data.indicators || {}
 
     // Prepare candlestick data
     const candlestickData = candles.map(c => ({
@@ -282,6 +309,23 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
     if (chartInstanceRef.current) {
       chartInstanceRef.current.timeScale().fitContent()
     }
+  }
+
+  // Update chart data when chartData changes
+  useEffect(() => {
+    if (!chartData) return
+    
+    // Wait for chart to be ready, then update
+    const tryUpdate = () => {
+      if (chartInstanceRef.current && candlestickSeriesRef.current) {
+        updateChartData(chartData)
+      } else {
+        // Chart not ready yet, try again in 100ms
+        setTimeout(tryUpdate, 100)
+      }
+    }
+    
+    tryUpdate()
   }, [chartData, showIndicators])
 
   // Update chart height when compact prop changes

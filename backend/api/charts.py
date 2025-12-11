@@ -91,6 +91,7 @@ def get_chart_data(symbol: str):
         
         # Convert to DataFrame
         df = pd.DataFrame(candles)
+        logger.info(f"Created DataFrame with {len(df)} rows. Columns: {df.columns.tolist()}")
         
         # Handle datetime column
         if 'datetime' in df.columns:
@@ -98,6 +99,13 @@ def get_chart_data(symbol: str):
         elif 'time' in df.columns:
             df['datetime'] = pd.to_datetime(df['time'], unit='ms')
             df = df.rename(columns={'time': 'datetime'})
+        else:
+            logger.error(f"No datetime or time column found. Available columns: {df.columns.tolist()}")
+            return jsonify({"error": "Invalid data format from market data provider"}), 500
+        
+        # Log raw datetime range before timezone conversion
+        if len(df) > 0:
+            logger.info(f"Raw datetime range: {df['datetime'].min()} to {df['datetime'].max()}")
         
         # Ensure numeric types BEFORE calculating indicators
         for col in ['open', 'high', 'low', 'close', 'volume']:
@@ -183,36 +191,60 @@ def get_chart_data(symbol: str):
             # If no data for target date, try to find the most recent trading day
             logger.warning(f"No data for {date_label} ({target_date}). Searching for most recent available trading day...")
             
-            # Get unique dates from the full dataset, sorted descending
+            # Get unique dates from the full dataset BEFORE any filtering, sorted descending
             if len(df) > 0:
-                unique_dates = sorted(df['datetime_et'].dt.date.unique(), reverse=True)
-                logger.info(f"Available dates in dataset: {unique_dates}")
-                
-                # Try to find the most recent date with data between 8 AM - 4:10 PM
-                for available_date in unique_dates:
-                    date_start = et.localize(datetime.combine(available_date, datetime.min.time().replace(hour=8, minute=0)))
-                    date_end = et.localize(datetime.combine(available_date, datetime.min.time().replace(hour=16, minute=10)))
+                # Make sure we have datetime_et column
+                if 'datetime_et' not in df.columns:
+                    logger.error("datetime_et column missing from dataframe")
+                else:
+                    unique_dates = sorted(df['datetime_et'].dt.date.unique(), reverse=True)
+                    logger.info(f"Total candles in dataset: {len(df)}")
+                    logger.info(f"Available dates in dataset: {unique_dates}")
+                    logger.info(f"Date range in dataset: {df['datetime_et'].min()} to {df['datetime_et'].max()}")
                     
-                    df_fallback = df[
-                        (df['datetime_et'] >= date_start) &
-                        (df['datetime_et'] <= date_end)
-                    ].copy()
+                    # Try to find the most recent date with data between 8 AM - 4:10 PM
+                    fallback_found = False
+                    for available_date in unique_dates:
+                        date_start = et.localize(datetime.combine(available_date, datetime.min.time().replace(hour=8, minute=0)))
+                        date_end = et.localize(datetime.combine(available_date, datetime.min.time().replace(hour=16, minute=10)))
+                        
+                        df_fallback = df[
+                            (df['datetime_et'] >= date_start) &
+                            (df['datetime_et'] <= date_end)
+                        ].copy()
+                        
+                        logger.info(f"Checking date {available_date}: {len(df_fallback)} candles between 8 AM - 4:10 PM")
+                        
+                        if len(df_fallback) > 0:
+                            logger.info(f"✓ Using fallback date: {available_date} with {len(df_fallback)} candles")
+                            df_filtered = df_fallback
+                            target_date = available_date
+                            date_label = "most recent trading day"
+                            fallback_found = True
+                            break
                     
-                    if len(df_fallback) > 0:
-                        logger.info(f"Using fallback date: {available_date} with {len(df_fallback)} candles")
-                        df_filtered = df_fallback
-                        target_date = available_date
-                        date_label = "most recent trading day"
-                        break
+                    # If no date has data in 8 AM - 4:10 PM range, use the most recent date with ANY data
+                    if not fallback_found and len(unique_dates) > 0:
+                        logger.warning("No date found with data between 8 AM - 4:10 PM. Using most recent date with any data...")
+                        most_recent_date = unique_dates[0]
+                        df_fallback = df[df['datetime_et'].dt.date == most_recent_date].copy()
+                        if len(df_fallback) > 0:
+                            logger.info(f"Using most recent date {most_recent_date} with {len(df_fallback)} total candles")
+                            df_filtered = df_fallback
+                            target_date = most_recent_date
+                            date_label = "most recent available date"
+                            fallback_found = True
             
-            # If still no data, return error
+            # If still no data, return error with detailed info
             if len(df_filtered) == 0:
                 unique_dates = df['datetime_et'].dt.date.unique() if len(df) > 0 else []
                 date_range = (df['datetime_et'].min(), df['datetime_et'].max()) if len(df) > 0 else (None, None)
+                logger.error(f"Failed to find any data. Target: {target_date}, Available dates: {unique_dates}")
                 return jsonify({
                     "error": f"No data available for {date_label} ({target_date}) between 8:00 AM ET and 4:10 PM ET",
                     "available_dates": [str(d) for d in unique_dates],
-                    "date_range": {"min": str(date_range[0]) if date_range[0] else None, "max": str(date_range[1]) if date_range[1] else None}
+                    "date_range": {"min": str(date_range[0]) if date_range[0] else None, "max": str(date_range[1]) if date_range[1] else None},
+                    "total_candles": len(df) if len(df) > 0 else 0
                 }), 404
         
         # Use filtered dataframe

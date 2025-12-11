@@ -60,16 +60,35 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
     const candles = data.candles || []
     const indicators = data.indicators || {}
 
-    console.log('Updating chart with data:', { candles: candles.length, hasIndicators: !!indicators.sma_8 })
+    console.log('Updating chart with data:', { 
+      candles: candles.length, 
+      hasIndicators: !!indicators,
+      sma_8_count: indicators.sma_8?.length || 0,
+      sma_20_count: indicators.sma_20?.length || 0,
+      sma_200_count: indicators.sma_200?.length || 0,
+      timeframe: timeframe
+    })
 
     // Prepare candlestick data
-    const candlestickData = candles.map(c => ({
-      time: Math.floor(new Date(c.time).getTime() / 1000), // Unix timestamp in seconds
-      open: parseFloat(c.open),
-      high: parseFloat(c.high),
-      low: parseFloat(c.low),
-      close: parseFloat(c.close),
-    }))
+    const candlestickData = candles.map(c => {
+      // Handle both timestamp (number in ms) and ISO string formats
+      let timestamp
+      if (typeof c.time === 'number') {
+        timestamp = Math.floor(c.time / 1000) // Convert ms to seconds
+      } else if (typeof c.time === 'string') {
+        timestamp = Math.floor(new Date(c.time).getTime() / 1000)
+      } else {
+        console.warn('Invalid candle time format:', c.time)
+        timestamp = 0
+      }
+      return {
+        time: timestamp,
+        open: parseFloat(c.open),
+        high: parseFloat(c.high),
+        low: parseFloat(c.low),
+        close: parseFloat(c.close),
+      }
+    })
 
     // Update candlestick series
     if (candlestickSeriesRef.current) {
@@ -83,13 +102,36 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
     if (showIndicators.mm8 && indicators.sma_8) {
       const mm8Data = indicators.sma_8
         .filter(i => i.value !== null && i.value !== undefined)
-        .map(i => ({
-          time: Math.floor(new Date(i.time).getTime() / 1000),
-          value: parseFloat(i.value),
-        }))
-      if (mm8SeriesRef.current && mm8Data.length > 0) {
-        mm8SeriesRef.current.setData(mm8Data)
-        mm8SeriesRef.current.applyOptions({ visible: true })
+        .map(i => {
+          // Handle both timestamp (number) and ISO string formats
+          let timestamp
+          if (typeof i.time === 'number') {
+            timestamp = Math.floor(i.time / 1000) // Convert ms to seconds
+          } else if (typeof i.time === 'string') {
+            timestamp = Math.floor(new Date(i.time).getTime() / 1000)
+          } else {
+            console.warn('Invalid MM8 time format:', i.time)
+            return null
+          }
+          return {
+            time: timestamp,
+            value: parseFloat(i.value),
+          }
+        })
+        .filter(i => i !== null)
+      
+      console.log(`MM8 data: ${mm8Data.length} points (from ${indicators.sma_8.length} total)`)
+      if (mm8SeriesRef.current) {
+        if (mm8Data.length > 0) {
+          mm8SeriesRef.current.setData(mm8Data)
+          mm8SeriesRef.current.applyOptions({ visible: true })
+          console.log('MM8 series updated and made visible')
+        } else {
+          console.warn('MM8 data is empty after filtering')
+          mm8SeriesRef.current.applyOptions({ visible: false })
+        }
+      } else {
+        console.error('MM8 series ref not available')
       }
     } else if (mm8SeriesRef.current) {
       mm8SeriesRef.current.applyOptions({ visible: false })
@@ -99,13 +141,36 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
     if (showIndicators.mm20 && indicators.sma_20) {
       const mm20Data = indicators.sma_20
         .filter(i => i.value !== null && i.value !== undefined)
-        .map(i => ({
-          time: Math.floor(new Date(i.time).getTime() / 1000),
-          value: parseFloat(i.value),
-        }))
-      if (mm20SeriesRef.current && mm20Data.length > 0) {
-        mm20SeriesRef.current.setData(mm20Data)
-        mm20SeriesRef.current.applyOptions({ visible: true })
+        .map(i => {
+          // Handle both timestamp (number) and ISO string formats
+          let timestamp
+          if (typeof i.time === 'number') {
+            timestamp = Math.floor(i.time / 1000) // Convert ms to seconds
+          } else if (typeof i.time === 'string') {
+            timestamp = Math.floor(new Date(i.time).getTime() / 1000)
+          } else {
+            console.warn('Invalid MM20 time format:', i.time)
+            return null
+          }
+          return {
+            time: timestamp,
+            value: parseFloat(i.value),
+          }
+        })
+        .filter(i => i !== null)
+      
+      console.log(`MM20 data: ${mm20Data.length} points (from ${indicators.sma_20.length} total)`)
+      if (mm20SeriesRef.current) {
+        if (mm20Data.length > 0) {
+          mm20SeriesRef.current.setData(mm20Data)
+          mm20SeriesRef.current.applyOptions({ visible: true })
+          console.log('MM20 series updated and made visible')
+        } else {
+          console.warn('MM20 data is empty after filtering')
+          mm20SeriesRef.current.applyOptions({ visible: false })
+        }
+      } else {
+        console.error('MM20 series ref not available')
       }
     } else if (mm20SeriesRef.current) {
       mm20SeriesRef.current.applyOptions({ visible: false })
@@ -115,13 +180,36 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
     if (showIndicators.mm200 && indicators.sma_200) {
       const mm200Data = indicators.sma_200
         .filter(i => i.value !== null && i.value !== undefined)
-        .map(i => ({
-          time: Math.floor(new Date(i.time).getTime() / 1000),
-          value: parseFloat(i.value),
-        }))
-      if (mm200SeriesRef.current && mm200Data.length > 0) {
-        mm200SeriesRef.current.setData(mm200Data)
-        mm200SeriesRef.current.applyOptions({ visible: true })
+        .map(i => {
+          // Handle both timestamp (number) and ISO string formats
+          let timestamp
+          if (typeof i.time === 'number') {
+            timestamp = Math.floor(i.time / 1000) // Convert ms to seconds
+          } else if (typeof i.time === 'string') {
+            timestamp = Math.floor(new Date(i.time).getTime() / 1000)
+          } else {
+            console.warn('Invalid MM200 time format:', i.time)
+            return null
+          }
+          return {
+            time: timestamp,
+            value: parseFloat(i.value),
+          }
+        })
+        .filter(i => i !== null)
+      
+      console.log(`MM200 data: ${mm200Data.length} points available (total indicators: ${indicators.sma_200?.length || 0})`)
+      if (mm200SeriesRef.current) {
+        if (mm200Data.length > 0) {
+          mm200SeriesRef.current.setData(mm200Data)
+          mm200SeriesRef.current.applyOptions({ visible: true })
+          console.log('MM200 series updated and made visible')
+        } else {
+          console.warn('MM200 data is empty - may need more historical data')
+          mm200SeriesRef.current.applyOptions({ visible: false })
+        }
+      } else {
+        console.error('MM200 series ref not available')
       }
     } else if (mm200SeriesRef.current) {
       mm200SeriesRef.current.applyOptions({ visible: false })
@@ -459,24 +547,26 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
   const parseTimeframe = (tf) => {
     // Returns [periodValue, periodType, frequency]
     // Note: Schwab API only accepts [1, 5, 10, 15, 30] for minute frequency
+    // Request enough days to ensure we have 200+ candles for SMA200 calculation
+    // After filtering to 8 AM - 4:10 PM ET, we get ~480 minutes per day
     switch (tf) {
       case '1min':
-        return [1, 'day', 1]
+        return [10, 'day', 1]  // Request 10 days for enough data (480 candles/day)
       case '2min':
         // 2min not supported, use 1min instead
-        return [1, 'day', 1]
+        return [10, 'day', 1]  // Request 10 days
       case '5min':
-        return [1, 'day', 5]
+        return [10, 'day', 5]  // Request 10 days (96 candles/day)
       case '15min':
-        return [1, 'day', 15]
+        return [10, 'day', 15]  // Request 10 days (32 candles/day)
       case '30min':
-        return [1, 'day', 30]
+        return [10, 'day', 30]  // Request 10 days (16 candles/day)
       case '1hour':
-        return [5, 'day', 60]
+        return [10, 'day', 60]
       case '1day':
         return [1, 'month', 1]
       default:
-        return [1, 'day', 1]  // Default to 1min (valid)
+        return [10, 'day', 1]  // Default to 10 days for enough data
     }
   }
 

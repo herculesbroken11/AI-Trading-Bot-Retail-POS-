@@ -104,18 +104,19 @@ export async function getWatchlist() {
 export async function getChartData(symbol, timeframe = '1min') {
   // Parse timeframe
   // Note: Schwab API only accepts [1, 5, 10, 15, 30] for minute frequency
-  // Request 5 days of data to ensure we have enough historical data for SMA200 calculation
-  // The backend will filter to show only 8 AM - 4:10 PM ET
+  // Request enough days to ensure we have 200+ candles for SMA200 calculation
+  // After filtering to 8 AM - 4:10 PM ET, we get ~480 minutes per day
+  // The backend will automatically adjust period_value if needed
   const [periodValue, periodType, frequency] = (() => {
     switch (timeframe) {
-      case '1min': return [5, 'day', 1]  // Request 5 days for enough data
-      case '2min': return [5, 'day', 1]  // 2min not supported, use 1min instead, request 5 days
-      case '5min': return [5, 'day', 5]  // Request 5 days
-      case '15min': return [5, 'day', 15]  // Request 5 days
-      case '30min': return [5, 'day', 30]  // Request 5 days
-      case '1hour': return [5, 'day', 60]
+      case '1min': return [10, 'day', 1]  // Request 10 days for enough data (480 candles/day = ~4800 total, need 200 for MM200)
+      case '2min': return [10, 'day', 1]  // 2min not supported, use 1min instead, request 10 days
+      case '5min': return [10, 'day', 5]  // Request 10 days (96 candles/day = ~960 total, need 200 for MM200)
+      case '15min': return [10, 'day', 15]  // Request 10 days (32 candles/day = ~320 total, need 200 for MM200)
+      case '30min': return [10, 'day', 30]  // Request 10 days (16 candles/day = ~160 total, may need more)
+      case '1hour': return [10, 'day', 60]
       case '1day': return [1, 'month', 1]
-      default: return [5, 'day', 1]  // Default to 5 days for enough data
+      default: return [10, 'day', 1]  // Default to 10 days for enough data
     }
   })()
   

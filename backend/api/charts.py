@@ -40,6 +40,20 @@ def get_chart_data(symbol: str):
         frequency_type = request.args.get('frequencyType', 'minute')
         frequency = int(request.args.get('frequency', 1))
         
+        # For MM200 calculation, we need at least 200 data points
+        # After filtering to 8 AM - 4:10 PM ET, we get ~8 hours = ~480 minutes per day
+        # For shorter timeframes, we need more days to ensure MM200 has enough data
+        # Calculate minimum days needed: 200 candles / (480 minutes per day / frequency)
+        if frequency_type == 'minute' and frequency > 0:
+            minutes_per_day = 480  # 8 AM - 4:10 PM = ~8 hours = 480 minutes
+            candles_per_day = minutes_per_day / frequency
+            min_days_needed = max(1, int(200 / candles_per_day) + 1)  # +1 for safety margin
+            if period_value < min_days_needed:
+                logger.info(f"Increasing period_value from {period_value} to {min_days_needed} to ensure MM200 has enough data (frequency: {frequency}min)")
+                period_value = min_days_needed
+                # Cap at 10 days to avoid too much data
+                period_value = min(period_value, 10)
+        
         # Validate frequency for minute type
         # Schwab API only accepts [1, 5, 10, 15, 30] for minute frequency
         if frequency_type == 'minute' and frequency not in [1, 5, 10, 15, 30]:
@@ -88,7 +102,17 @@ def get_chart_data(symbol: str):
         # Calculate indicators using OV engine on FULL dataset FIRST
         # This ensures SMA200 has enough historical data (200+ candles) to calculate properly
         # We need to calculate on the full dataset, then filter to show only 8 AM - 4:10 PM
+        # Check if we have enough data for MM200 (need at least 200 candles)
+        if len(df) < 200:
+            logger.warning(f"Only {len(df)} candles available, MM200 may not be fully calculated. Requested period: {period_value} {period_type}, frequency: {frequency}min")
+        
         df = ov_engine.calculate_indicators(df)
+        
+        # Log indicator calculation results
+        sma8_count = df['sma_8'].notna().sum() if 'sma_8' in df.columns else 0
+        sma20_count = df['sma_20'].notna().sum() if 'sma_20' in df.columns else 0
+        sma200_count = df['sma_200'].notna().sum() if 'sma_200' in df.columns else 0
+        logger.info(f"Indicator calculation complete: {len(df)} total candles, MM8: {sma8_count}, MM20: {sma20_count}, MM200: {sma200_count} values calculated (frequency: {frequency}min)")
         
         # Now filter data to show only from 8:00 AM ET to 4:10 PM ET
         # Convert to ET timezone and filter
@@ -154,11 +178,15 @@ def get_chart_data(symbol: str):
                     'value': float(row['sma_20'])
                 })
             
-            if 'sma_200' in row and pd.notna(row['sma_200']):
-                chart_data['indicators']['sma_200'].append({
-                    'time': candle['time'],
-                    'value': float(row['sma_200'])
-                })
+            # Always include MM200 if it exists and is valid
+            # MM200 needs 200 candles, so early candles will have NaN values
+            if 'sma_200' in row:
+                if pd.notna(row['sma_200']):
+                    chart_data['indicators']['sma_200'].append({
+                        'time': candle['time'],
+                        'value': float(row['sma_200'])
+                    })
+                # If MM200 is NaN, skip it (expected for first ~200 candles)
             
             if 'rsi_14' in row and pd.notna(row['rsi_14']):
                 chart_data['indicators']['rsi_14'].append({

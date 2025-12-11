@@ -125,8 +125,12 @@ def get_chart_data(symbol: str):
             df['datetime_et'] = df['datetime'].dt.tz_convert(et)
         
         # Get current time in ET timezone
+        # Use pytz-aware datetime to ensure correct timezone handling
         now_et = datetime.now(et)
         current_hour = now_et.hour
+        current_date = now_et.date()
+        
+        logger.info(f"Current time in ET: {now_et} (Hour: {current_hour}, Date: {current_date})")
         
         # If before 8 AM ET, show yesterday's data (8 AM - 4:10 PM)
         # Otherwise, show today's data (8 AM - 4:10 PM)
@@ -134,17 +138,20 @@ def get_chart_data(symbol: str):
             # Before 8 AM, use yesterday
             target_date = (now_et - timedelta(days=1)).date()
             date_label = "yesterday"
+            logger.info(f"Before 8 AM ET - showing {date_label}'s data ({target_date})")
         else:
             # 8 AM or later, use today
             target_date = now_et.date()
             date_label = "today"
+            logger.info(f"8 AM or later ET - showing {date_label}'s data ({target_date})")
         
         # Get target date's start and end times in ET
+        # Create timezone-aware datetime objects
         target_start_et = et.localize(datetime.combine(target_date, datetime.min.time().replace(hour=8, minute=0)))
         target_end_et = et.localize(datetime.combine(target_date, datetime.min.time().replace(hour=16, minute=10)))
         
-        logger.info(f"Current time: {now_et} ({now_et.hour}:{now_et.minute:02d} ET). Filtering data for {date_label} ({target_date}) from 8:00 AM to 4:10 PM ET. Total candles before filtering: {len(df)}")
-        logger.info(f"Date range: {target_start_et} to {target_end_et}")
+        logger.info(f"Filtering data for {date_label} ({target_date}) from 8:00 AM to 4:10 PM ET. Total candles before filtering: {len(df)}")
+        logger.info(f"Target date range: {target_start_et} to {target_end_et}")
         
         # Filter to only include target date's data from 8:00 AM ET to 4:10 PM ET
         # This includes premarket (8:00 AM - 9:30 AM) and regular trading hours (9:30 AM - 4:00 PM) + 10 min buffer

@@ -73,16 +73,21 @@ def get_chart_data(symbol: str):
             logger.warning(f"Invalid frequency {request.args.get('frequency')} for minute type, using {frequency} instead")
         
         # Request historical data from Schwab (include premarket/extended hours)
+        # Request enough days to ensure we have data even if target date is a weekend/holiday
         url = f"{SCHWAB_HISTORICAL_URL}?symbol={symbol.upper()}&periodType={period_type}&period={period_value}&frequencyType={frequency_type}&frequency={frequency}&needExtendedHoursData=true"
         response = schwab_api_request("GET", url, access_token)
         data = response.json()
         
         if not data or 'candles' not in data:
-            return jsonify({"error": "No data available"}), 404
+            logger.error(f"No data returned from Schwab API for {symbol}")
+            return jsonify({"error": "No data available from market data provider"}), 404
         
         candles = data['candles']
         if not candles or len(candles) == 0:
-            return jsonify({"error": "Empty data"}), 404
+            logger.error(f"Empty candles array returned from Schwab API for {symbol}")
+            return jsonify({"error": "Empty data returned from market data provider"}), 404
+        
+        logger.info(f"Received {len(candles)} candles from Schwab API for {symbol}")
         
         # Convert to DataFrame
         df = pd.DataFrame(candles)
@@ -175,7 +180,40 @@ def get_chart_data(symbol: str):
                 logger.warning(f"No data for {date_label} ({target_date}). Available dates: {unique_dates}, Date range: {date_range}")
         
         if len(df_filtered) == 0:
-            return jsonify({"error": f"No data available for {date_label} ({target_date}) between 8:00 AM ET and 4:10 PM ET"}), 404
+            # If no data for target date, try to find the most recent trading day
+            logger.warning(f"No data for {date_label} ({target_date}). Searching for most recent available trading day...")
+            
+            # Get unique dates from the full dataset, sorted descending
+            if len(df) > 0:
+                unique_dates = sorted(df['datetime_et'].dt.date.unique(), reverse=True)
+                logger.info(f"Available dates in dataset: {unique_dates}")
+                
+                # Try to find the most recent date with data between 8 AM - 4:10 PM
+                for available_date in unique_dates:
+                    date_start = et.localize(datetime.combine(available_date, datetime.min.time().replace(hour=8, minute=0)))
+                    date_end = et.localize(datetime.combine(available_date, datetime.min.time().replace(hour=16, minute=10)))
+                    
+                    df_fallback = df[
+                        (df['datetime_et'] >= date_start) &
+                        (df['datetime_et'] <= date_end)
+                    ].copy()
+                    
+                    if len(df_fallback) > 0:
+                        logger.info(f"Using fallback date: {available_date} with {len(df_fallback)} candles")
+                        df_filtered = df_fallback
+                        target_date = available_date
+                        date_label = "most recent trading day"
+                        break
+            
+            # If still no data, return error
+            if len(df_filtered) == 0:
+                unique_dates = df['datetime_et'].dt.date.unique() if len(df) > 0 else []
+                date_range = (df['datetime_et'].min(), df['datetime_et'].max()) if len(df) > 0 else (None, None)
+                return jsonify({
+                    "error": f"No data available for {date_label} ({target_date}) between 8:00 AM ET and 4:10 PM ET",
+                    "available_dates": [str(d) for d in unique_dates],
+                    "date_range": {"min": str(date_range[0]) if date_range[0] else None, "max": str(date_range[1]) if date_range[1] else None}
+                }), 404
         
         # Use filtered dataframe
         df = df_filtered

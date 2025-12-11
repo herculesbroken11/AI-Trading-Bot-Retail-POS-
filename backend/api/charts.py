@@ -125,18 +125,42 @@ def get_chart_data(symbol: str):
             df['datetime_et'] = df['datetime'].dt.tz_convert(et)
         
         # Get today's date in ET timezone
-        today_et = datetime.now(et).date()
+        now_et = datetime.now(et)
+        today_et = now_et.date()
+        
+        # Also get today's start and end times in ET
+        today_start_et = et.localize(datetime.combine(today_et, datetime.min.time().replace(hour=8, minute=0)))
+        today_end_et = et.localize(datetime.combine(today_et, datetime.min.time().replace(hour=16, minute=10)))
+        
+        logger.info(f"Filtering data for today ({today_et}) from 8:00 AM to 4:10 PM ET. Total candles before filtering: {len(df)}")
+        logger.info(f"Date range: {today_start_et} to {today_end_et}")
         
         # Filter to only include TODAY's data from 8:00 AM ET to 4:10 PM ET
         # This includes premarket (8:00 AM - 9:30 AM) and regular trading hours (9:30 AM - 4:00 PM) + 10 min buffer
-        df = df[
-            (df['datetime_et'].dt.date == today_et) &
-            (df['datetime_et'].dt.hour >= 8) & 
-            ((df['datetime_et'].dt.hour < 16) | ((df['datetime_et'].dt.hour == 16) & (df['datetime_et'].dt.minute <= 10)))
+        # Use timestamp comparison for more reliable filtering
+        df_filtered = df[
+            (df['datetime_et'] >= today_start_et) &
+            (df['datetime_et'] <= today_end_et)
         ].copy()
         
-        if len(df) == 0:
-            return jsonify({"error": "No data available between 8:00 AM ET and 4:10 PM ET"}), 404
+        # Log date range of filtered data
+        if len(df_filtered) > 0:
+            min_date = df_filtered['datetime_et'].min()
+            max_date = df_filtered['datetime_et'].max()
+            unique_dates = df_filtered['datetime_et'].dt.date.unique()
+            logger.info(f"Filtered data: {len(df_filtered)} candles from {min_date} to {max_date}. Unique dates: {unique_dates}")
+        else:
+            # If no data for today, check what dates we have
+            if len(df) > 0:
+                unique_dates = df['datetime_et'].dt.date.unique()
+                date_range = (df['datetime_et'].min(), df['datetime_et'].max())
+                logger.warning(f"No data for today ({today_et}). Available dates: {unique_dates}, Date range: {date_range}")
+        
+        if len(df_filtered) == 0:
+            return jsonify({"error": f"No data available for today ({today_et}) between 8:00 AM ET and 4:10 PM ET"}), 404
+        
+        # Use filtered dataframe
+        df = df_filtered
         
         # Convert to chart-friendly format
         chart_data = {

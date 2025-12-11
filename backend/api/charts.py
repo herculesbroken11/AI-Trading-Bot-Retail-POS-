@@ -3,7 +3,7 @@ Chart Data API Endpoints
 Provides OHLCV data and indicators for real-time charting.
 """
 from flask import Blueprint, request, jsonify
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import pandas as pd
 from utils.logger import setup_logger
 from utils.helpers import get_valid_access_token, schwab_api_request
@@ -114,7 +114,7 @@ def get_chart_data(symbol: str):
         sma200_count = df['sma_200'].notna().sum() if 'sma_200' in df.columns else 0
         logger.info(f"Indicator calculation complete: {len(df)} total candles, MM8: {sma8_count}, MM20: {sma20_count}, MM200: {sma200_count} values calculated (frequency: {frequency}min)")
         
-        # Now filter data to show only from 8:00 AM ET to 4:10 PM ET
+        # Now filter data to show only TODAY's data from 8:00 AM ET to 4:10 PM ET
         # Convert to ET timezone and filter
         import pytz
         et = pytz.timezone('US/Eastern')
@@ -124,9 +124,13 @@ def get_chart_data(symbol: str):
         else:
             df['datetime_et'] = df['datetime'].dt.tz_convert(et)
         
-        # Filter to only include data from 8:00 AM ET to 4:10 PM ET
+        # Get today's date in ET timezone
+        today_et = datetime.now(et).date()
+        
+        # Filter to only include TODAY's data from 8:00 AM ET to 4:10 PM ET
         # This includes premarket (8:00 AM - 9:30 AM) and regular trading hours (9:30 AM - 4:00 PM) + 10 min buffer
         df = df[
+            (df['datetime_et'].dt.date == today_et) &
             (df['datetime_et'].dt.hour >= 8) & 
             ((df['datetime_et'].dt.hour < 16) | ((df['datetime_et'].dt.hour == 16) & (df['datetime_et'].dt.minute <= 10)))
         ].copy()

@@ -1,32 +1,7 @@
-import React, { useState, useEffect } from 'react'
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  BarElement,
-  Title,
-  Tooltip,
-  Legend,
-  Filler
-} from 'chart.js'
-import { Line, Bar } from 'react-chartjs-2'
+import React, { useState, useEffect, useRef } from 'react'
+import { createChart, ColorType, CrosshairMode } from 'lightweight-charts'
 import { getWatchlist } from '../services/api'
 import './Card.css'
-
-// Register Chart.js components
-ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  BarElement,
-  Title,
-  Tooltip,
-  Legend,
-  Filler
-)
 
 function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimeframe, compact = false }) {
   const [chartData, setChartData] = useState(null)
@@ -41,6 +16,15 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
     mm200: true,
     volume: true
   })
+
+  // Chart refs
+  const chartContainerRef = useRef(null)
+  const chartInstanceRef = useRef(null)
+  const candlestickSeriesRef = useRef(null)
+  const mm8SeriesRef = useRef(null)
+  const mm20SeriesRef = useRef(null)
+  const mm200SeriesRef = useRef(null)
+  const volumeSeriesRef = useRef(null)
 
   useEffect(() => {
     // Load watchlist from automation status
@@ -65,6 +49,249 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
       loadChartData()
     }
   }, [selectedSymbol, timeframe, lastUpdate])
+
+  // Initialize chart
+  useEffect(() => {
+    if (!chartContainerRef.current) return
+
+    // Create chart instance
+    const chart = createChart(chartContainerRef.current, {
+      layout: {
+        background: { type: ColorType.Solid, color: '#0f0f0f' },
+        textColor: '#9ca3af',
+      },
+      grid: {
+        vertLines: { color: '#2a2f4a' },
+        horzLines: { color: '#2a2f4a' },
+      },
+      crosshair: {
+        mode: CrosshairMode.Normal,
+      },
+      rightPriceScale: {
+        borderColor: '#2a2f4a',
+        scaleMargins: {
+          top: 0.1,
+          bottom: 0.1,
+        },
+      },
+      timeScale: {
+        borderColor: '#2a2f4a',
+        timeVisible: true,
+        secondsVisible: false,
+      },
+      width: chartContainerRef.current.clientWidth,
+      height: compact ? 300 : 500,
+    })
+
+    chartInstanceRef.current = chart
+
+    // Create candlestick series with very clear, visible candles
+    const candlestickSeries = chart.addCandlestickSeries({
+      upColor: '#22c55e',      // Bright green for up candles
+      downColor: '#f87171',   // Bright red for down candles
+      borderVisible: true,
+      wickUpColor: '#22c55e',
+      wickDownColor: '#f87171',
+      borderUpColor: '#16a34a',  // Darker green border
+      borderDownColor: '#dc2626', // Darker red border
+      priceScaleId: 'right',
+      priceFormat: {
+        type: 'price',
+        precision: 2,
+        minMove: 0.01,
+      },
+    })
+    candlestickSeriesRef.current = candlestickSeries
+
+    // Create MM8 line (red - fast)
+    const mm8Series = chart.addLineSeries({
+      color: '#ef4444',
+      lineWidth: 2,
+      title: 'MM8',
+      priceScaleId: 'right',
+      priceFormat: {
+        type: 'price',
+        precision: 2,
+        minMove: 0.01,
+      },
+    })
+    mm8SeriesRef.current = mm8Series
+
+    // Create MM20 line (yellow/gold - medium)
+    const mm20Series = chart.addLineSeries({
+      color: '#f59e0b',
+      lineWidth: 2,
+      title: 'MM20',
+      priceScaleId: 'right',
+      priceFormat: {
+        type: 'price',
+        precision: 2,
+        minMove: 0.01,
+      },
+    })
+    mm20SeriesRef.current = mm20Series
+
+    // Create MM200 line (blue - slow)
+    const mm200Series = chart.addLineSeries({
+      color: '#3b82f6',
+      lineWidth: 2.5,
+      title: 'MM200',
+      priceScaleId: 'right',
+      priceFormat: {
+        type: 'price',
+        precision: 2,
+        minMove: 0.01,
+      },
+    })
+    mm200SeriesRef.current = mm200Series
+
+    // Create volume histogram (overlay on main chart)
+    const volumeSeries = chart.addHistogramSeries({
+      color: '#667eea',
+      priceFormat: {
+        type: 'volume',
+      },
+      priceScaleId: 'volume',
+      scaleMargins: {
+        top: 0.85,
+        bottom: 0,
+      },
+    })
+    volumeSeriesRef.current = volumeSeries
+
+    // Create volume price scale (right side, separate from price)
+    chart.priceScale('volume').applyOptions({
+      scaleMargins: {
+        top: 0.85,
+        bottom: 0,
+      },
+    })
+
+    // Handle resize
+    const handleResize = () => {
+      if (chartContainerRef.current && chartInstanceRef.current) {
+        chartInstanceRef.current.applyOptions({
+          width: chartContainerRef.current.clientWidth,
+        })
+      }
+    }
+
+    window.addEventListener('resize', handleResize)
+
+    return () => {
+      window.removeEventListener('resize', handleResize)
+      if (chartInstanceRef.current) {
+        chartInstanceRef.current.remove()
+        chartInstanceRef.current = null
+      }
+    }
+  }, [])
+
+  // Update chart data when chartData changes
+  useEffect(() => {
+    if (!chartData || !chartInstanceRef.current) return
+
+    const candles = chartData.candles || []
+    const indicators = chartData.indicators || {}
+
+    // Prepare candlestick data
+    const candlestickData = candles.map(c => ({
+      time: Math.floor(new Date(c.time).getTime() / 1000), // Unix timestamp in seconds
+      open: parseFloat(c.open),
+      high: parseFloat(c.high),
+      low: parseFloat(c.low),
+      close: parseFloat(c.close),
+    }))
+
+    // Update candlestick series
+    if (candlestickSeriesRef.current) {
+      candlestickSeriesRef.current.setData(candlestickData)
+    }
+
+    // Prepare MM8 data - Always show on all timeframes
+    if (showIndicators.mm8 && indicators.sma_8) {
+      const mm8Data = indicators.sma_8
+        .filter(i => i.value !== null && i.value !== undefined)
+        .map(i => ({
+          time: Math.floor(new Date(i.time).getTime() / 1000),
+          value: parseFloat(i.value),
+        }))
+      if (mm8SeriesRef.current && mm8Data.length > 0) {
+        mm8SeriesRef.current.setData(mm8Data)
+        mm8SeriesRef.current.applyOptions({ visible: true })
+      }
+    } else if (mm8SeriesRef.current) {
+      mm8SeriesRef.current.applyOptions({ visible: false })
+    }
+
+    // Prepare MM20 data - Always show on all timeframes
+    if (showIndicators.mm20 && indicators.sma_20) {
+      const mm20Data = indicators.sma_20
+        .filter(i => i.value !== null && i.value !== undefined)
+        .map(i => ({
+          time: Math.floor(new Date(i.time).getTime() / 1000),
+          value: parseFloat(i.value),
+        }))
+      if (mm20SeriesRef.current && mm20Data.length > 0) {
+        mm20SeriesRef.current.setData(mm20Data)
+        mm20SeriesRef.current.applyOptions({ visible: true })
+      }
+    } else if (mm20SeriesRef.current) {
+      mm20SeriesRef.current.applyOptions({ visible: false })
+    }
+
+    // Prepare MM200 data - Always show on all timeframes
+    if (showIndicators.mm200 && indicators.sma_200) {
+      const mm200Data = indicators.sma_200
+        .filter(i => i.value !== null && i.value !== undefined)
+        .map(i => ({
+          time: Math.floor(new Date(i.time).getTime() / 1000),
+          value: parseFloat(i.value),
+        }))
+      if (mm200SeriesRef.current && mm200Data.length > 0) {
+        mm200SeriesRef.current.setData(mm200Data)
+        mm200SeriesRef.current.applyOptions({ visible: true })
+      }
+    } else if (mm200SeriesRef.current) {
+      mm200SeriesRef.current.applyOptions({ visible: false })
+    }
+
+    // Prepare volume data
+    if (showIndicators.volume) {
+      const volumeData = candles.map((c, index) => {
+        const prevClose = index > 0 ? parseFloat(candles[index - 1].close) : parseFloat(c.close)
+        const currentClose = parseFloat(c.close)
+        const isUp = currentClose >= prevClose
+
+        return {
+          time: Math.floor(new Date(c.time).getTime() / 1000),
+          value: parseFloat(c.volume || 0),
+          color: isUp ? '#10b981' : '#ef4444',
+        }
+      })
+
+      if (volumeSeriesRef.current) {
+        volumeSeriesRef.current.setData(volumeData)
+        volumeSeriesRef.current.applyOptions({ visible: true })
+      }
+    } else if (volumeSeriesRef.current) {
+      volumeSeriesRef.current.applyOptions({ visible: false })
+    }
+
+    // Fit content
+    if (chartInstanceRef.current) {
+      chartInstanceRef.current.timeScale().fitContent()
+    }
+  }, [chartData, showIndicators])
+
+  // Update chart height when compact prop changes
+  useEffect(() => {
+    if (chartInstanceRef.current && chartContainerRef.current) {
+      chartInstanceRef.current.applyOptions({
+        height: compact ? 300 : 500,
+      })
+    }
+  }, [compact])
 
   const loadWatchlist = async () => {
     try {
@@ -141,210 +368,6 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
     }
   }
 
-  const prepareCandlestickData = () => {
-    if (!chartData || !chartData.candles) return null
-
-    const candles = chartData.candles
-    const labels = candles.map(c => {
-      const date = new Date(c.time)
-      return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-    })
-
-    // Prepare candlestick data format: [time, open, high, low, close]
-    const candlestickData = candles.map(c => ({
-      x: c.time,
-      o: c.open,
-      h: c.high,
-      l: c.low,
-      c: c.close
-    }))
-
-    // Get moving averages - Always calculate for all timeframes
-    const mm8 = chartData.indicators?.sma_8?.map(i => ({ x: i.time, y: i.value })) || []
-    const mm20 = chartData.indicators?.sma_20?.map(i => ({ x: i.time, y: i.value })) || []
-    const mm200 = chartData.indicators?.sma_200?.map(i => ({ x: i.time, y: i.value })) || []
-
-    // Store candlestick data for custom rendering
-    const datasets = [
-      {
-        label: 'Price',
-        data: candlestickData.map(c => ({ x: c.x, y: c.c })),
-        borderColor: 'transparent',
-        backgroundColor: 'transparent',
-        borderWidth: 0,
-        pointRadius: 0,
-        fill: false,
-        yAxisID: 'y',
-        // Store full OHLC data for custom rendering
-        _candlestickData: candlestickData
-      }
-    ]
-
-    // Add MM8 (red line - fast) - Always show on all timeframes
-    if (mm8.length > 0) {
-      datasets.push({
-        label: 'MM8',
-        data: mm8,
-        borderColor: '#ef4444',  // Red
-        backgroundColor: 'transparent',
-        borderWidth: 2,  // Increased for better visibility
-        pointRadius: 0,
-        fill: false,
-        yAxisID: 'y'
-      })
-    }
-
-    // Add MM20 (yellow/gold line - medium) - Always show on all timeframes
-    if (mm20.length > 0) {
-      datasets.push({
-        label: 'MM20',
-        data: mm20,
-        borderColor: '#f59e0b',  // Yellow/Gold
-        backgroundColor: 'transparent',
-        borderWidth: 2,  // Increased for better visibility
-        pointRadius: 0,
-        fill: false,
-        yAxisID: 'y'
-      })
-    }
-
-    // Add MM200 (blue line - slow) - Always show on all timeframes
-    if (mm200.length > 0) {
-      datasets.push({
-        label: 'MM200',
-        data: mm200,
-        borderColor: '#3b82f6',  // Blue
-        backgroundColor: 'transparent',
-        borderWidth: 2.5,  // Slightly thicker for long-term trend
-        pointRadius: 0,
-        fill: false,
-        yAxisID: 'y'
-      })
-    }
-
-    return {
-      labels,
-      datasets
-    }
-  }
-
-  const prepareVolumeData = () => {
-    if (!chartData || !chartData.candles || !showIndicators.volume) return null
-
-    const candles = chartData.candles
-    const labels = candles.map(c => {
-      const date = new Date(c.time)
-      return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-    })
-
-    const volumes = candles.map(c => c.volume || 0)
-    const colors = candles.map((c, i) => {
-      if (i === 0) return '#9ca3af'
-      return candles[i - 1].close <= c.close ? '#10b981' : '#ef4444'
-    })
-
-    return {
-      labels,
-      datasets: [{
-        label: 'Volume',
-        data: volumes,
-        backgroundColor: colors,
-        borderColor: colors,
-        borderWidth: 0,
-        yAxisID: 'y1'
-      }]
-    }
-  }
-
-  const chartOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: {
-        display: true,
-        position: 'top',
-        labels: {
-          color: '#9ca3af',
-          usePointStyle: true,
-          padding: 15,
-          filter: (item) => item.text !== 'Candles' // Hide candlestick from legend
-        }
-      },
-      tooltip: {
-        mode: 'index',
-        intersect: false,
-        backgroundColor: '#1a1f3a',
-        titleColor: '#fff',
-        bodyColor: '#e0e0e0',
-        borderColor: '#667eea',
-        borderWidth: 1,
-        callbacks: {
-          label: function(context) {
-            if (context.dataset.type === 'candlestick') {
-              const data = context.raw
-              return [
-                `Open: $${data.o.toFixed(2)}`,
-                `High: $${data.h.toFixed(2)}`,
-                `Low: $${data.l.toFixed(2)}`,
-                `Close: $${data.c.toFixed(2)}`
-              ]
-            }
-            return `${context.dataset.label}: $${context.parsed.y.toFixed(2)}`
-          }
-        }
-      }
-    },
-    scales: {
-      x: {
-        type: 'category',  // Use category instead of time for now
-        ticks: {
-          color: '#9ca3af',
-          maxTicksLimit: 12
-        },
-        grid: {
-          color: '#2a2f4a'
-        }
-      },
-      y: {
-        type: 'linear',
-        display: true,
-        position: 'left',
-        ticks: {
-          color: '#9ca3af',
-          callback: function(value) {
-            return '$' + value.toFixed(2)
-          }
-        },
-        grid: {
-          color: '#2a2f4a'
-        }
-      }
-    },
-    interaction: {
-      mode: 'nearest',
-      axis: 'x',
-      intersect: false
-    }
-  }
-
-  const volumeOptions = {
-    ...chartOptions,
-    scales: {
-      x: chartOptions.scales.x,
-      y1: {
-        type: 'linear',
-        display: true,
-        position: 'right',
-        ticks: {
-          color: '#9ca3af'
-        },
-        grid: {
-          display: false
-        }
-      }
-    }
-  }
-
   if (!selectedSymbol) {
     return (
       <div className="card">
@@ -355,9 +378,6 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
       </div>
     )
   }
-
-  const candlestickData = prepareCandlestickData()
-  const volumeData = prepareVolumeData()
 
   return (
     <div className="card" style={compact ? { padding: '15px' } : {}}>
@@ -425,11 +445,35 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
 
       <div style={{ marginBottom: '15px', display: 'flex', gap: '15px', flexWrap: 'wrap', alignItems: 'center' }}>
         <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
-          <span style={{ color: '#ef4444', fontWeight: 'bold' }}>● MM8</span>
-          <span style={{ color: '#f59e0b', fontWeight: 'bold' }}>● MM20</span>
-          <span style={{ color: '#3b82f6', fontWeight: 'bold' }}>● MM200</span>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#ef4444', fontWeight: 'bold', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={showIndicators.mm8}
+              onChange={(e) => setShowIndicators({ ...showIndicators, mm8: e.target.checked })}
+              style={{ marginRight: '5px' }}
+            />
+            MM8
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#f59e0b', fontWeight: 'bold', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={showIndicators.mm20}
+              onChange={(e) => setShowIndicators({ ...showIndicators, mm20: e.target.checked })}
+              style={{ marginRight: '5px' }}
+            />
+            MM20
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#3b82f6', fontWeight: 'bold', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={showIndicators.mm200}
+              onChange={(e) => setShowIndicators({ ...showIndicators, mm200: e.target.checked })}
+              style={{ marginRight: '5px' }}
+            />
+            MM200
+          </label>
         </div>
-        <label style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#9ca3af', fontSize: '14px' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#9ca3af', fontSize: '14px', cursor: 'pointer' }}>
           <input
             type="checkbox"
             checked={showIndicators.volume}
@@ -459,74 +503,17 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
         </div>
       )}
 
-      {candlestickData && !loading && (
-        <div>
-          <div style={{ height: compact ? '300px' : '500px', marginBottom: compact ? '10px' : '20px', background: '#0f0f0f', borderRadius: '5px', padding: '10px' }}>
-            <Line 
-              data={candlestickData} 
-              options={chartOptions}
-              plugins={[{
-                id: 'candlestick',
-                afterDatasetsDraw: (chart) => {
-                  const ctx = chart.ctx
-                  const meta = chart.getDatasetMeta(0)
-                  const dataset = chart.data.datasets[0]
-                  const candlestickData = dataset._candlestickData
-                  
-                  if (!candlestickData || !meta.data) return
-                  
-                  const yScale = chart.scales.y
-                  
-                  candlestickData.forEach((candle, index) => {
-                    if (index >= meta.data.length) return
-                    
-                    const point = meta.data[index]
-                    if (!point) return
-                    
-                    const x = point.x
-                    const yOpen = yScale.getPixelForValue(candle.o)
-                    const yClose = yScale.getPixelForValue(candle.c)
-                    const yHigh = yScale.getPixelForValue(candle.h)
-                    const yLow = yScale.getPixelForValue(candle.l)
-                    
-                    const isUp = candle.c >= candle.o
-                    // Use brighter, more visible colors for candles
-                    const color = isUp ? '#22c55e' : '#f87171'  // Brighter green/red
-                    const borderColor = isUp ? '#16a34a' : '#dc2626'  // Darker border
-                    
-                    // Draw wick (high-low line) - make it thicker and more visible
-                    ctx.strokeStyle = color
-                    ctx.lineWidth = 2  // Increased from 1
-                    ctx.beginPath()
-                    ctx.moveTo(x, yHigh)
-                    ctx.lineTo(x, yLow)
-                    ctx.stroke()
-                    
-                    // Draw body (open-close rectangle) - make it wider and more visible
-                    const bodyTop = Math.min(yOpen, yClose)
-                    const bodyBottom = Math.max(yOpen, yClose)
-                    const bodyHeight = Math.max(bodyBottom - bodyTop, 2)  // Minimum 2px height
-                    const bodyWidth = 10  // Increased from 6 to 10 for better visibility
-                    
-                    ctx.fillStyle = color
-                    ctx.fillRect(x - bodyWidth/2, bodyTop, bodyWidth, bodyHeight)
-                    // Add border for better definition
-                    ctx.strokeStyle = borderColor
-                    ctx.lineWidth = 1.5
-                    ctx.strokeRect(x - bodyWidth/2, bodyTop, bodyWidth, bodyHeight)
-                  })
-                }
-              }]}
-            />
-          </div>
-
-          {showIndicators.volume && volumeData && (
-            <div style={{ height: compact ? '100px' : '150px', marginBottom: compact ? '10px' : '20px' }}>
-              <Bar data={volumeData} options={volumeOptions} />
-            </div>
-          )}
-        </div>
-      )}
+      <div style={{ position: 'relative' }}>
+        <div 
+          ref={chartContainerRef} 
+          style={{ 
+            width: '100%', 
+            height: compact ? '300px' : '500px',
+            background: '#0f0f0f',
+            borderRadius: '5px'
+          }} 
+        />
+      </div>
 
       {chartData && !compact && (
         <div style={{ marginTop: '15px', padding: '10px', background: '#2a2f4a', borderRadius: '5px', fontSize: '12px', color: '#9ca3af' }}>

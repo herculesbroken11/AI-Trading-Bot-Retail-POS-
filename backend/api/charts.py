@@ -142,37 +142,200 @@ def get_chart_data(symbol: str):
         now_et = datetime.now(et)
         current_hour = now_et.hour
         current_date = now_et.date()
+        yesterday_date = (now_et - timedelta(days=1)).date()
         
         logger.info(f"Current time in ET: {now_et} (Hour: {current_hour}, Date: {current_date})")
         
-        # If before 8 AM ET, show yesterday's data (8 AM - 4:20 PM)
-        # Otherwise, show today's data (8 AM - 4:20 PM)
-        if current_hour < 8:
-            # Before 8 AM, use yesterday
-            target_date = (now_et - timedelta(days=1)).date()
-            date_label = "yesterday"
-            logger.info(f"Before 8 AM ET - showing {date_label}'s data ({target_date})")
-        else:
-            # 8 AM or later, use today
-            target_date = now_et.date()
-            date_label = "today"
-            logger.info(f"8 AM or later ET - showing {date_label}'s data ({target_date})")
+        # Define time range: 8:00 AM to 4:20 PM ET
+        time_start = datetime.min.time().replace(hour=8, minute=0)
+        time_end = datetime.min.time().replace(hour=16, minute=20)
         
-        # Get target date's start and end times in ET
-        # Create timezone-aware datetime objects
-        target_start_et = et.localize(datetime.combine(target_date, datetime.min.time().replace(hour=8, minute=0)))
-        target_end_et = et.localize(datetime.combine(target_date, datetime.min.time().replace(hour=16, minute=20)))
+        # Get today's and yesterday's time ranges
+        today_start_et = et.localize(datetime.combine(current_date, time_start))
+        today_end_et = et.localize(datetime.combine(current_date, time_end))
+        yesterday_start_et = et.localize(datetime.combine(yesterday_date, time_start))
+        yesterday_end_et = et.localize(datetime.combine(yesterday_date, time_end))
         
-        logger.info(f"Filtering data for {date_label} ({target_date}) from 8:00 AM to 4:20 PM ET. Total candles before filtering: {len(df)}")
-        logger.info(f"Target date range: {target_start_et} to {target_end_et}")
+        logger.info(f"Today's range: {today_start_et} to {today_end_et}")
+        logger.info(f"Yesterday's range: {yesterday_start_et} to {yesterday_end_et}")
         
-        # Filter to only include target date's data from 8:00 AM ET to 4:20 PM ET
-        # This includes premarket (8:00 AM - 9:30 AM) and regular trading hours (9:30 AM - 4:00 PM) + 20 min buffer
-        # Use timestamp comparison for more reliable filtering
-        df_filtered = df[
-            (df['datetime_et'] >= target_start_et) &
-            (df['datetime_et'] <= target_end_et)
+        # Filter data for both today and yesterday (8 AM - 4:20 PM ET)
+        df_today = df[
+            (df['datetime_et'] >= today_start_et) &
+            (df['datetime_et'] <= today_end_et)
         ].copy()
+        
+        df_yesterday = df[
+            (df['datetime_et'] >= yesterday_start_et) &
+            (df['datetime_et'] <= yesterday_end_et)
+        ].copy()
+        
+        logger.info(f"Today's data: {len(df_today)} candles")
+        logger.info(f"Yesterday's data: {len(df_yesterday)} candles")
+        
+        # Create fully populated continuous view from 8:00 AM to 4:20 PM
+        # Goal: Always display the full session window (8:00 AM - 4:20 PM) with no gaps
+        # Strategy: Create a complete time series template and fill each slot with available data
+        
+        current_time_only = now_et.time()
+        
+        # Determine target date and end time for the session
+        if current_hour < 8:
+            # Before 8 AM: Show yesterday's complete session (8 AM - 4:20 PM)
+            target_date = yesterday_date
+            session_end_time = time_end  # 4:20 PM
+            date_label = "yesterday (complete session)"
+            logger.info(f"Before 8 AM ET - showing {date_label} (8:00 AM - 4:20 PM)")
+        elif current_time_only <= time_end:
+            # Between 8 AM and 4:20 PM: Show today's data up to current time
+            target_date = current_date
+            session_end_time = current_time_only  # Current time
+            date_label = f"today (8:00 AM - {current_time_only.strftime('%I:%M %p')})"
+            logger.info(f"During trading hours - showing {date_label}")
+        else:
+            # After 4:20 PM: Show today's complete session (8 AM - 4:20 PM)
+            target_date = current_date
+            session_end_time = time_end  # 4:20 PM
+            date_label = "today (complete session)"
+            logger.info(f"After 4:20 PM ET - showing {date_label} (8:00 AM - 4:20 PM)")
+        
+        # Check if target_date has data, if not find fallback date (for market holidays)
+        df_target_check = df[
+            (df['datetime_et'].dt.date == target_date) &
+            (df['datetime_et'].dt.time >= time_start) &
+            (df['datetime_et'].dt.time <= session_end_time)
+        ]
+        
+        if len(df_target_check) == 0:
+            # No data for target date - likely a market holiday
+            logger.warning(f"No data for {date_label} ({target_date}). Searching for most recent available trading day...")
+            
+            # Get unique dates from the full dataset, sorted descending
+            if len(df) > 0:
+                unique_dates = sorted(df['datetime_et'].dt.date.unique(), reverse=True)
+                logger.info(f"Available dates in dataset: {unique_dates}")
+                
+                # Try to find the most recent date with data between 8 AM - 4:20 PM
+                fallback_found = False
+                for available_date in unique_dates:
+                    date_start = et.localize(datetime.combine(available_date, datetime.min.time().replace(hour=8, minute=0)))
+                    date_end = et.localize(datetime.combine(available_date, datetime.min.time().replace(hour=16, minute=20)))
+                    
+                    df_fallback_check = df[
+                        (df['datetime_et'] >= date_start) &
+                        (df['datetime_et'] <= date_end)
+                    ]
+                    
+                    logger.info(f"Checking date {available_date}: {len(df_fallback_check)} candles between 8 AM - 4:20 PM")
+                    
+                    if len(df_fallback_check) > 0:
+                        logger.info(f"✓ Using fallback date: {available_date} with {len(df_fallback_check)} candles")
+                        target_date = available_date
+                        session_end_time = time_end  # Always show full session (8 AM - 4:20 PM) for fallback dates
+                        date_label = "most recent trading day"
+                        fallback_found = True
+                        break
+                
+                # If no date has data in 8 AM - 4:20 PM range, use the most recent date with ANY data
+                if not fallback_found and len(unique_dates) > 0:
+                    logger.warning("No date found with data between 8 AM - 4:20 PM. Using most recent date with any data...")
+                    most_recent_date = unique_dates[0]
+                    df_fallback_check = df[df['datetime_et'].dt.date == most_recent_date]
+                    if len(df_fallback_check) > 0:
+                        logger.info(f"Using most recent date {most_recent_date} with {len(df_fallback_check)} total candles")
+                        target_date = most_recent_date
+                        session_end_time = time_end  # Always show full session for fallback dates
+                        date_label = "most recent available date"
+                        fallback_found = True
+        
+        # Get data for target date (which may have been updated by fallback logic)
+        df_target = df[
+            (df['datetime_et'].dt.date == target_date) &
+            (df['datetime_et'].dt.time >= time_start) &
+            (df['datetime_et'].dt.time <= session_end_time)
+        ].copy()
+        
+        # Get yesterday's data for gap filling (use the day before target_date)
+        target_yesterday_date = target_date - timedelta(days=1)
+        df_yesterday_for_fill = df[
+            (df['datetime_et'].dt.date == target_yesterday_date) &
+            (df['datetime_et'].dt.time >= time_start) &
+            (df['datetime_et'].dt.time <= time_end)
+        ].copy()
+        
+        # Create a complete time series template from 8:00 AM to session_end_time
+        # Use the frequency to determine time intervals
+        if frequency_type == 'minute' and frequency > 0:
+            # Generate all time slots for the session
+            session_start_dt = et.localize(datetime.combine(target_date, time_start))
+            session_end_dt = et.localize(datetime.combine(target_date, session_end_time))
+            
+            # Create time slots at the specified frequency
+            time_slots = []
+            current_slot = session_start_dt
+            while current_slot <= session_end_dt:
+                time_slots.append(current_slot.time())
+                current_slot += timedelta(minutes=frequency)
+            
+            logger.info(f"Created {len(time_slots)} time slots from 8:00 AM to {session_end_time.strftime('%I:%M %p')} at {frequency}min intervals")
+            
+            # Build complete dataframe by filling each time slot
+            df_complete = []
+            
+            for slot_time in time_slots:
+                # Try to find data for this time slot from target date
+                slot_data = df_target[df_target['datetime_et'].dt.time == slot_time]
+                
+                if len(slot_data) > 0:
+                    # Use target date's data
+                    df_complete.append(slot_data.iloc[0:1])
+                else:
+                    # Fill with previous day's data for this time slot
+                    prev_day_slot = df_yesterday_for_fill[df_yesterday_for_fill['datetime_et'].dt.time == slot_time]
+                    if len(prev_day_slot) > 0:
+                        # Use previous day's data but adjust the date to target_date for continuity
+                        fill_row = prev_day_slot.iloc[0:1].copy()
+                        # Adjust datetime_et to target_date while keeping the time
+                        # This ensures the x-axis shows continuous time on the target_date
+                        adjusted_datetime_et = et.localize(datetime.combine(target_date, slot_time))
+                        fill_row.loc[fill_row.index[0], 'datetime_et'] = adjusted_datetime_et
+                        # Also adjust the original datetime column to match
+                        if 'datetime' in fill_row.columns:
+                            # Convert ET datetime to UTC for the datetime column
+                            fill_row.loc[fill_row.index[0], 'datetime'] = adjusted_datetime_et.astimezone(pytz.UTC).replace(tzinfo=None)
+                        df_complete.append(fill_row)
+                        logger.debug(f"Filled {slot_time.strftime('%I:%M %p')} with previous day's data")
+                    # If no previous day data either, skip this slot (shouldn't happen if we have enough historical data)
+            
+            if df_complete:
+                df_filtered = pd.concat(df_complete, ignore_index=True).sort_values('datetime_et')
+                logger.info(f"Created complete time series with {len(df_filtered)} candles (no gaps) for {date_label}")
+            else:
+                # Final fallback: return error
+                unique_dates = df['datetime_et'].dt.date.unique() if len(df) > 0 else []
+                date_range = (df['datetime_et'].min(), df['datetime_et'].max()) if len(df) > 0 else (None, None)
+                logger.error(f"Failed to create time series. Target: {target_date}, Available dates: {unique_dates}")
+                return jsonify({
+                    "error": f"No data available for {date_label} ({target_date}) between 8:00 AM ET and {session_end_time.strftime('%I:%M %p')} ET",
+                    "available_dates": [str(d) for d in unique_dates],
+                    "date_range": {"min": str(date_range[0]) if date_range[0] else None, "max": str(date_range[1]) if date_range[1] else None},
+                    "total_candles": len(df) if len(df) > 0 else 0
+                }), 404
+        else:
+            # Non-minute frequency - use simpler approach (fallback)
+            logger.warning(f"Non-minute frequency ({frequency_type}), using fallback approach")
+            if current_hour < 8:
+                df_filtered = df_yesterday.copy()
+            elif current_time_only <= time_end:
+                df_filtered = df_today[
+                    (df_today['datetime_et'] >= today_start_et) &
+                    (df_today['datetime_et'] <= now_et)
+                ].copy()
+            else:
+                df_filtered = df_today.copy()
+            
+            if len(df_filtered) == 0:
+                df_filtered = df_yesterday.copy()
         
         # Log date range of filtered data
         if len(df_filtered) > 0:
@@ -180,75 +343,16 @@ def get_chart_data(symbol: str):
             max_date = df_filtered['datetime_et'].max()
             unique_dates = df_filtered['datetime_et'].dt.date.unique()
             logger.info(f"Filtered data: {len(df_filtered)} candles from {min_date} to {max_date}. Unique dates: {unique_dates}")
-        else:
-            # If no data for target date, check what dates we have
-            if len(df) > 0:
-                unique_dates = df['datetime_et'].dt.date.unique()
-                date_range = (df['datetime_et'].min(), df['datetime_et'].max())
-                logger.warning(f"No data for {date_label} ({target_date}). Available dates: {unique_dates}, Date range: {date_range}")
-        
-        if len(df_filtered) == 0:
-            # If no data for target date, try to find the most recent trading day
-            logger.warning(f"No data for {date_label} ({target_date}). Searching for most recent available trading day...")
-            
-            # Get unique dates from the full dataset BEFORE any filtering, sorted descending
-            if len(df) > 0:
-                # Make sure we have datetime_et column
-                if 'datetime_et' not in df.columns:
-                    logger.error("datetime_et column missing from dataframe")
-                else:
-                    unique_dates = sorted(df['datetime_et'].dt.date.unique(), reverse=True)
-                    logger.info(f"Total candles in dataset: {len(df)}")
-                    logger.info(f"Available dates in dataset: {unique_dates}")
-                    logger.info(f"Date range in dataset: {df['datetime_et'].min()} to {df['datetime_et'].max()}")
-                    
-                    # Try to find the most recent date with data between 8 AM - 4:20 PM
-                    fallback_found = False
-                    for available_date in unique_dates:
-                        date_start = et.localize(datetime.combine(available_date, datetime.min.time().replace(hour=8, minute=0)))
-                        date_end = et.localize(datetime.combine(available_date, datetime.min.time().replace(hour=16, minute=20)))
-                        
-                        df_fallback = df[
-                            (df['datetime_et'] >= date_start) &
-                            (df['datetime_et'] <= date_end)
-                        ].copy()
-                        
-                        logger.info(f"Checking date {available_date}: {len(df_fallback)} candles between 8 AM - 4:20 PM")
-                        
-                        if len(df_fallback) > 0:
-                            logger.info(f"✓ Using fallback date: {available_date} with {len(df_fallback)} candles")
-                            df_filtered = df_fallback
-                            target_date = available_date
-                            date_label = "most recent trading day"
-                            fallback_found = True
-                            break
-                    
-                    # If no date has data in 8 AM - 4:20 PM range, use the most recent date with ANY data
-                    if not fallback_found and len(unique_dates) > 0:
-                        logger.warning("No date found with data between 8 AM - 4:20 PM. Using most recent date with any data...")
-                        most_recent_date = unique_dates[0]
-                        df_fallback = df[df['datetime_et'].dt.date == most_recent_date].copy()
-                        if len(df_fallback) > 0:
-                            logger.info(f"Using most recent date {most_recent_date} with {len(df_fallback)} total candles")
-                            df_filtered = df_fallback
-                            target_date = most_recent_date
-                            date_label = "most recent available date"
-                            fallback_found = True
-            
-            # If still no data, return error with detailed info
-            if len(df_filtered) == 0:
-                unique_dates = df['datetime_et'].dt.date.unique() if len(df) > 0 else []
-                date_range = (df['datetime_et'].min(), df['datetime_et'].max()) if len(df) > 0 else (None, None)
-                logger.error(f"Failed to find any data. Target: {target_date}, Available dates: {unique_dates}")
-                return jsonify({
-                    "error": f"No data available for {date_label} ({target_date}) between 8:00 AM ET and 4:20 PM ET",
-                    "available_dates": [str(d) for d in unique_dates],
-                    "date_range": {"min": str(date_range[0]) if date_range[0] else None, "max": str(date_range[1]) if date_range[1] else None},
-                    "total_candles": len(df) if len(df) > 0 else 0
-                }), 404
         
         # Use filtered dataframe
         df = df_filtered
+        
+        # Log the actual time range of filtered data
+        if len(df) > 0:
+            min_time_et = df['datetime_et'].min()
+            max_time_et = df['datetime_et'].max()
+            unique_dates_final = df['datetime_et'].dt.date.unique()
+            logger.info(f"Final filtered data: {len(df)} candles, Date(s): {unique_dates_final}, Time range: {min_time_et} to {max_time_et} ET")
         
         # Convert to chart-friendly format
         chart_data = {
@@ -270,9 +374,25 @@ def get_chart_data(symbol: str):
         }
         
         # Format candles and indicators
+        # Use datetime_et for timestamps - this ensures we're using the ET timezone datetime
+        # Unix timestamps are timezone-agnostic, but we want the timestamp that represents
+        # the correct moment in ET timezone
         for idx, row in df.iterrows():
+            # Use datetime_et (ET timezone) for the timestamp
+            # The timestamp() method converts to Unix timestamp (UTC-based but timezone-aware)
+            if 'datetime_et' in row and pd.notna(row['datetime_et']):
+                # Convert ET datetime to Unix timestamp (in seconds, then to milliseconds)
+                # This preserves the correct moment in time
+                et_timestamp = int(row['datetime_et'].timestamp() * 1000)
+            elif 'datetime' in row and pd.notna(row['datetime']):
+                # Fallback to datetime if datetime_et is not available
+                et_timestamp = int(row['datetime'].timestamp() * 1000)
+            else:
+                logger.warning(f"Missing datetime for candle at index {idx}")
+                et_timestamp = None
+            
             candle = {
-                'time': int(row['datetime'].timestamp() * 1000) if 'datetime' in row else None,
+                'time': et_timestamp,
                 'open': float(row['open']) if pd.notna(row.get('open')) else None,
                 'high': float(row['high']) if pd.notna(row.get('high')) else None,
                 'low': float(row['low']) if pd.notna(row.get('low')) else None,

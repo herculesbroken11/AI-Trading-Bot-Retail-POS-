@@ -723,7 +723,7 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
           Candles: {chartData.metadata.total_candles} | 
           Period: {chartData.metadata.period_type} | 
           Frequency: {chartData.metadata.frequency}min | 
-          Hours: 8:00 AM - 4:10 PM ET
+          Hours: 8:00 AM - 4:20 PM ET
         </div>
       )}
     </div>

@@ -41,11 +41,11 @@ def get_chart_data(symbol: str):
         frequency = int(request.args.get('frequency', 1))
         
         # For MM200 calculation, we need at least 200 data points
-        # After filtering to 8 AM - 4:10 PM ET, we get ~8 hours = ~480 minutes per day
+        # After filtering to 8 AM - 4:20 PM ET, we get ~8.33 hours = ~500 minutes per day
         # For shorter timeframes, we need more days to ensure MM200 has enough data
-        # Calculate minimum days needed: 200 candles / (480 minutes per day / frequency)
+        # Calculate minimum days needed: 200 candles / (500 minutes per day / frequency)
         if frequency_type == 'minute' and frequency > 0:
-            minutes_per_day = 480  # 8 AM - 4:10 PM = ~8 hours = 480 minutes
+            minutes_per_day = 500  # 8 AM - 4:20 PM = ~8.33 hours = 500 minutes
             candles_per_day = minutes_per_day / frequency
             min_days_needed = max(1, int(200 / candles_per_day) + 1)  # +1 for safety margin
             if period_value < min_days_needed:
@@ -114,7 +114,7 @@ def get_chart_data(symbol: str):
         
         # Calculate indicators using OV engine on FULL dataset FIRST
         # This ensures SMA200 has enough historical data (200+ candles) to calculate properly
-        # We need to calculate on the full dataset, then filter to show only 8 AM - 4:10 PM
+        # We need to calculate on the full dataset, then filter to show only 8 AM - 4:20 PM
         # Check if we have enough data for MM200 (need at least 200 candles)
         if len(df) < 200:
             logger.warning(f"Only {len(df)} candles available, MM200 may not be fully calculated. Requested period: {period_value} {period_type}, frequency: {frequency}min")
@@ -127,7 +127,7 @@ def get_chart_data(symbol: str):
         sma200_count = df['sma_200'].notna().sum() if 'sma_200' in df.columns else 0
         logger.info(f"Indicator calculation complete: {len(df)} total candles, MM8: {sma8_count}, MM20: {sma20_count}, MM200: {sma200_count} values calculated (frequency: {frequency}min)")
         
-        # Now filter data to show only TODAY's data from 8:00 AM ET to 4:10 PM ET
+        # Now filter data to show only TODAY's data from 8:00 AM ET to 4:20 PM ET
         # Convert to ET timezone and filter
         import pytz
         et = pytz.timezone('US/Eastern')
@@ -145,8 +145,8 @@ def get_chart_data(symbol: str):
         
         logger.info(f"Current time in ET: {now_et} (Hour: {current_hour}, Date: {current_date})")
         
-        # If before 8 AM ET, show yesterday's data (8 AM - 4:10 PM)
-        # Otherwise, show today's data (8 AM - 4:10 PM)
+        # If before 8 AM ET, show yesterday's data (8 AM - 4:20 PM)
+        # Otherwise, show today's data (8 AM - 4:20 PM)
         if current_hour < 8:
             # Before 8 AM, use yesterday
             target_date = (now_et - timedelta(days=1)).date()
@@ -161,13 +161,13 @@ def get_chart_data(symbol: str):
         # Get target date's start and end times in ET
         # Create timezone-aware datetime objects
         target_start_et = et.localize(datetime.combine(target_date, datetime.min.time().replace(hour=8, minute=0)))
-        target_end_et = et.localize(datetime.combine(target_date, datetime.min.time().replace(hour=16, minute=10)))
+        target_end_et = et.localize(datetime.combine(target_date, datetime.min.time().replace(hour=16, minute=20)))
         
-        logger.info(f"Filtering data for {date_label} ({target_date}) from 8:00 AM to 4:10 PM ET. Total candles before filtering: {len(df)}")
+        logger.info(f"Filtering data for {date_label} ({target_date}) from 8:00 AM to 4:20 PM ET. Total candles before filtering: {len(df)}")
         logger.info(f"Target date range: {target_start_et} to {target_end_et}")
         
-        # Filter to only include target date's data from 8:00 AM ET to 4:10 PM ET
-        # This includes premarket (8:00 AM - 9:30 AM) and regular trading hours (9:30 AM - 4:00 PM) + 10 min buffer
+        # Filter to only include target date's data from 8:00 AM ET to 4:20 PM ET
+        # This includes premarket (8:00 AM - 9:30 AM) and regular trading hours (9:30 AM - 4:00 PM) + 20 min buffer
         # Use timestamp comparison for more reliable filtering
         df_filtered = df[
             (df['datetime_et'] >= target_start_et) &
@@ -202,18 +202,18 @@ def get_chart_data(symbol: str):
                     logger.info(f"Available dates in dataset: {unique_dates}")
                     logger.info(f"Date range in dataset: {df['datetime_et'].min()} to {df['datetime_et'].max()}")
                     
-                    # Try to find the most recent date with data between 8 AM - 4:10 PM
+                    # Try to find the most recent date with data between 8 AM - 4:20 PM
                     fallback_found = False
                     for available_date in unique_dates:
                         date_start = et.localize(datetime.combine(available_date, datetime.min.time().replace(hour=8, minute=0)))
-                        date_end = et.localize(datetime.combine(available_date, datetime.min.time().replace(hour=16, minute=10)))
+                        date_end = et.localize(datetime.combine(available_date, datetime.min.time().replace(hour=16, minute=20)))
                         
                         df_fallback = df[
                             (df['datetime_et'] >= date_start) &
                             (df['datetime_et'] <= date_end)
                         ].copy()
                         
-                        logger.info(f"Checking date {available_date}: {len(df_fallback)} candles between 8 AM - 4:10 PM")
+                        logger.info(f"Checking date {available_date}: {len(df_fallback)} candles between 8 AM - 4:20 PM")
                         
                         if len(df_fallback) > 0:
                             logger.info(f"✓ Using fallback date: {available_date} with {len(df_fallback)} candles")
@@ -223,9 +223,9 @@ def get_chart_data(symbol: str):
                             fallback_found = True
                             break
                     
-                    # If no date has data in 8 AM - 4:10 PM range, use the most recent date with ANY data
+                    # If no date has data in 8 AM - 4:20 PM range, use the most recent date with ANY data
                     if not fallback_found and len(unique_dates) > 0:
-                        logger.warning("No date found with data between 8 AM - 4:10 PM. Using most recent date with any data...")
+                        logger.warning("No date found with data between 8 AM - 4:20 PM. Using most recent date with any data...")
                         most_recent_date = unique_dates[0]
                         df_fallback = df[df['datetime_et'].dt.date == most_recent_date].copy()
                         if len(df_fallback) > 0:
@@ -241,7 +241,7 @@ def get_chart_data(symbol: str):
                 date_range = (df['datetime_et'].min(), df['datetime_et'].max()) if len(df) > 0 else (None, None)
                 logger.error(f"Failed to find any data. Target: {target_date}, Available dates: {unique_dates}")
                 return jsonify({
-                    "error": f"No data available for {date_label} ({target_date}) between 8:00 AM ET and 4:10 PM ET",
+                    "error": f"No data available for {date_label} ({target_date}) between 8:00 AM ET and 4:20 PM ET",
                     "available_dates": [str(d) for d in unique_dates],
                     "date_range": {"min": str(date_range[0]) if date_range[0] else None, "max": str(date_range[1]) if date_range[1] else None},
                     "total_candles": len(df) if len(df) > 0 else 0

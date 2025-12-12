@@ -146,6 +146,12 @@ def get_chart_data(symbol: str):
         
         logger.info(f"Current time in ET: {now_et} (Hour: {current_hour}, Date: {current_date})")
         
+        # Log available dates in the dataset
+        if len(df) > 0:
+            unique_dates_in_data = sorted(df['datetime_et'].dt.date.unique(), reverse=True)
+            logger.info(f"Available dates in fetched data: {unique_dates_in_data}")
+            logger.info(f"Data date range: {df['datetime_et'].min()} to {df['datetime_et'].max()}")
+        
         # Define time range: 8:00 AM to 4:20 PM ET
         time_start = datetime.min.time().replace(hour=8, minute=0)
         time_end = datetime.min.time().replace(hour=16, minute=20)
@@ -199,14 +205,25 @@ def get_chart_data(symbol: str):
             date_label = "today (complete session)"
             logger.info(f"After 4:20 PM ET - showing {date_label} (8:00 AM - 4:20 PM)")
         
-        # Check if target_date has data, if not find fallback date (for market holidays)
+        # Check if target_date has data
+        # IMPORTANT: We should only use fallback for market holidays (when target_date is a non-trading day)
+        # If it's after 4:20 PM on a trading day, we should show today's session even if there's no data yet
+        # (we'll fill gaps with previous day's data)
         df_target_check = df[
             (df['datetime_et'].dt.date == target_date) &
             (df['datetime_et'].dt.time >= time_start) &
             (df['datetime_et'].dt.time <= session_end_time)
         ]
         
-        if len(df_target_check) == 0:
+        # Only use fallback if:
+        # 1. No data for target_date AND
+        # 2. We're trying to show a full session (not during trading hours) AND
+        # 3. The target_date is not today (meaning it's likely a market holiday)
+        use_fallback = (len(df_target_check) == 0 and 
+                        session_end_time == time_end and 
+                        target_date != current_date)
+        
+        if use_fallback:
             # No data for target date - likely a market holiday
             logger.warning(f"No data for {date_label} ({target_date}). Searching for most recent available trading day...")
             
@@ -247,6 +264,13 @@ def get_chart_data(symbol: str):
                         session_end_time = time_end  # Always show full session for fallback dates
                         date_label = "most recent available date"
                         fallback_found = True
+        elif len(df_target_check) == 0 and target_date == current_date:
+            # Today has no data, but we should still show today's session (fill with previous day's data)
+            logger.info(f"No data for today ({target_date}) yet, but showing today's session with gap filling from previous day")
+        
+        # Log final target date decision
+        logger.info(f"Final target date: {target_date} (current_date: {current_date}, yesterday_date: {yesterday_date})")
+        logger.info(f"Session end time: {session_end_time.strftime('%I:%M %p')}, Date label: {date_label}")
         
         # Get data for target date (which may have been updated by fallback logic)
         df_target = df[

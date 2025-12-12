@@ -315,6 +315,7 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
             rightBarStaysOnScroll: false,
             shiftVisibleRangeOnNewBar: false,
             // Display times in ET timezone
+            timeZone: 'America/New_York',
             visible: true,
           },
           width: containerWidth,

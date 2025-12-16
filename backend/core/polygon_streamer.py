@@ -26,8 +26,8 @@ class PolygonStreamer:
     
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or os.getenv('POLYGON_API_KEY')
-        if not self.api_key:
-            raise ValueError("POLYGON_API_KEY not found in environment variables")
+        # Don't raise error on init - allow lazy initialization
+        # Will check when connect() is called
         
         self.ws = None
         self.is_connected = False
@@ -48,6 +48,10 @@ class PolygonStreamer:
         """Connect to Polygon.io WebSocket stream."""
         if self.is_connected:
             return
+        
+        # Check API key before connecting
+        if not self.api_key:
+            raise ValueError("POLYGON_API_KEY not found in environment variables. Please set POLYGON_API_KEY in .env file.")
         
         try:
             self.ws = websocket.WebSocketApp(

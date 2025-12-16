@@ -30,14 +30,18 @@ class PolygonMarketDataService:
             watchlist: List of symbols to monitor (default: from env)
         """
         self.watchlist = watchlist or self._load_watchlist()
-        self.streamer = PolygonStreamer()
+        # Initialize streamer lazily - don't require API key on init
+        self.streamer = None
         self.is_running = False
         self.monitoring_thread = None
         self.last_data_timestamp = {}  # symbol -> timestamp
         self.chart_generation_enabled = True
         
-        # Initialize database
-        init_market_data_db()
+        # Initialize database (this is safe even without API key)
+        try:
+            init_market_data_db()
+        except Exception as e:
+            logger.warning(f"Market data database initialization failed: {e}")
         
         logger.info(f"Polygon.io service initialized with watchlist: {self.watchlist}")
     
@@ -53,6 +57,10 @@ class PolygonMarketDataService:
             return
         
         try:
+            # Initialize streamer if not already initialized
+            if self.streamer is None:
+                self.streamer = PolygonStreamer()
+            
             # Connect WebSocket
             self.streamer.connect()
             
@@ -93,7 +101,8 @@ class PolygonMarketDataService:
             return
         
         self.is_running = False
-        self.streamer.disconnect()
+        if self.streamer:
+            self.streamer.disconnect()
         
         logger.info("Polygon.io market data service stopped")
     
@@ -236,10 +245,17 @@ class PolygonMarketDataService:
     
     def get_status(self) -> Dict[str, Any]:
         """Get service status."""
+        streamer_status = self.streamer.get_status() if self.streamer else {
+            "connected": False,
+            "authenticated": False,
+            "subscribed_symbols": [],
+            "reconnect_attempts": 0
+        }
+        
         return {
             "running": self.is_running,
             "watchlist": self.watchlist,
-            "streamer_status": self.streamer.get_status(),
+            "streamer_status": streamer_status,
             "last_data_timestamps": {
                 symbol: timestamp
                 for symbol, timestamp in self.last_data_timestamp.items()

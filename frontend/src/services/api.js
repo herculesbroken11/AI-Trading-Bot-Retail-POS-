@@ -103,9 +103,9 @@ export async function getWatchlist() {
 
 export async function getChartData(symbol, timeframe = '1min') {
   // Parse timeframe
-  // Note: Schwab API only accepts [1, 5, 10, 15, 30] for minute frequency
+  // Note: Polygon.io API supports various frequencies
   // Request enough days to ensure we have 200+ candles for SMA200 calculation
-  // After filtering to 8 AM - 4:10 PM ET, we get ~480 minutes per day
+  // After filtering to 8 AM - 4:20 PM ET, we get ~500 minutes per day
   // The backend will automatically adjust period_value if needed
   const [periodValue, periodType, frequency] = (() => {
     switch (timeframe) {

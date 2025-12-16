@@ -6,8 +6,7 @@ from flask import Blueprint, request, jsonify
 from datetime import datetime, timedelta, date
 import pandas as pd
 from utils.logger import setup_logger
-from utils.helpers import get_valid_access_token, schwab_api_request
-from api.quotes import SCHWAB_HISTORICAL_URL
+from utils.helpers import polygon_api_request
 from core.ov_engine import OVStrategyEngine
 
 charts_bp = Blueprint('charts', __name__, url_prefix='/charts')
@@ -32,8 +31,6 @@ def get_chart_data(symbol: str):
         JSON with candles, indicators, and metadata
     """
     try:
-        access_token = get_valid_access_token()
-        
         # Get query parameters
         period_type = request.args.get('periodType', 'day')
         period_value = int(request.args.get('periodValue', 1))
@@ -55,39 +52,62 @@ def get_chart_data(symbol: str):
                 period_value = min(period_value, 10)
         
         # Validate frequency for minute type
-        # Schwab API only accepts [1, 5, 10, 15, 30] for minute frequency
-        if frequency_type == 'minute' and frequency not in [1, 5, 10, 15, 30]:
+        # Polygon.io accepts various frequencies, but we'll use standard ones
+        if frequency_type == 'minute' and frequency not in [1, 5, 15, 30, 60]:
             # Map invalid frequencies to closest valid one
             if frequency == 2:
                 frequency = 1  # Map 2min to 1min
             elif frequency < 5:
                 frequency = 1
-            elif frequency < 10:
-                frequency = 5
             elif frequency < 15:
-                frequency = 10
+                frequency = 5
             elif frequency < 30:
                 frequency = 15
-            else:
+            elif frequency < 60:
                 frequency = 30
+            else:
+                frequency = 60
             logger.warning(f"Invalid frequency {request.args.get('frequency')} for minute type, using {frequency} instead")
         
-        # Request historical data from Schwab (include premarket/extended hours)
-        # Request enough days to ensure we have data even if target date is a weekend/holiday
-        url = f"{SCHWAB_HISTORICAL_URL}?symbol={symbol.upper()}&periodType={period_type}&period={period_value}&frequencyType={frequency_type}&frequency={frequency}&needExtendedHoursData=true"
-        response = schwab_api_request("GET", url, access_token)
-        data = response.json()
+        # Calculate date range for Polygon.io API
+        # Polygon.io requires from_date and to_date in YYYY-MM-DD format
+        import pytz
+        et = pytz.timezone('US/Eastern')
+        now_et = datetime.now(et)
+        
+        # Calculate end date (today)
+        to_date = now_et.date()
+        
+        # Calculate start date based on period_value and period_type
+        if period_type == 'day':
+            from_date = to_date - timedelta(days=period_value - 1)  # -1 because we include today
+        elif period_type == 'week':
+            from_date = to_date - timedelta(weeks=period_value - 1)
+        elif period_type == 'month':
+            from_date = to_date - timedelta(days=30 * (period_value - 1))
+        else:
+            from_date = to_date - timedelta(days=period_value - 1)
+        
+        # Request historical data from Polygon.io
+        logger.info(f"Fetching data from Polygon.io for {symbol}: {from_date} to {to_date}, frequency: {frequency}min")
+        data = polygon_api_request(
+            symbol=symbol.upper(),
+            multiplier=frequency,
+            timespan='minute' if frequency_type == 'minute' else 'day',
+            from_date=from_date.strftime('%Y-%m-%d'),
+            to_date=to_date.strftime('%Y-%m-%d')
+        )
         
         if not data or 'candles' not in data:
-            logger.error(f"No data returned from Schwab API for {symbol}")
+            logger.error(f"No data returned from Polygon.io API for {symbol}")
             return jsonify({"error": "No data available from market data provider"}), 404
         
         candles = data['candles']
         if not candles or len(candles) == 0:
-            logger.error(f"Empty candles array returned from Schwab API for {symbol}")
+            logger.error(f"Empty candles array returned from Polygon.io API for {symbol}")
             return jsonify({"error": "Empty data returned from market data provider"}), 404
         
-        logger.info(f"Received {len(candles)} candles from Schwab API for {symbol}")
+        logger.info(f"Received {len(candles)} candles from Polygon.io API for {symbol}")
         
         # Convert to DataFrame
         df = pd.DataFrame(candles)

@@ -189,3 +189,79 @@ def parse_time(time_str: str) -> tuple:
     parts = time_str.split(":")
     return int(parts[0]), int(parts[1])
 
+def polygon_api_request(
+    symbol: str,
+    multiplier: int,
+    timespan: str,
+    from_date: str,
+    to_date: str,
+    api_key: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Fetch historical market data from Polygon.io API.
+    
+    Args:
+        symbol: Stock symbol (e.g., 'AAPL')
+        multiplier: Size of the timespan multiplier (e.g., 1 for 1 minute)
+        timespan: Size of the time window ('minute', 'hour', 'day', etc.)
+        from_date: Start date in YYYY-MM-DD format
+        to_date: End date in YYYY-MM-DD format
+        api_key: Polygon.io API key (if None, loads from POLYGON_API_KEY env var)
+    
+    Returns:
+        Dictionary with 'candles' array matching Schwab format
+    """
+    if api_key is None:
+        api_key = os.getenv('POLYGON_API_KEY')
+        if not api_key:
+            raise Exception("POLYGON_API_KEY not found in environment variables")
+    
+    # Polygon.io REST API endpoint
+    base_url = "https://api.polygon.io/v2/aggs/ticker"
+    url = f"{base_url}/{symbol.upper()}/range/{multiplier}/{timespan}/{from_date}/{to_date}"
+    
+    params = {
+        "apiKey": api_key,
+        "adjusted": "true",  # Adjusted for splits and dividends
+        "sort": "asc"  # Sort ascending by timestamp
+    }
+    
+    try:
+        response = requests.get(url, params=params, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        
+        if not data or 'results' not in data:
+            logger.error(f"No results returned from Polygon.io API for {symbol}")
+            return {"candles": []}
+        
+        # Convert Polygon.io format to Schwab format
+        # Polygon format: {"results": [{"t": timestamp_ms, "o": open, "h": high, "l": low, "c": close, "v": volume}]}
+        # Schwab format: {"candles": [{"datetime": timestamp_ms, "open": o, "high": h, "low": l, "close": c, "volume": v}]}
+        candles = []
+        for result in data['results']:
+            candle = {
+                "datetime": result.get('t'),  # Timestamp in milliseconds
+                "open": result.get('o'),
+                "high": result.get('h'),
+                "low": result.get('l'),
+                "close": result.get('c'),
+                "volume": result.get('v')
+            }
+            candles.append(candle)
+        
+        logger.info(f"Fetched {len(candles)} candles from Polygon.io for {symbol}")
+        return {"candles": candles}
+        
+    except requests.exceptions.HTTPError as e:
+        error_msg = str(e)
+        if hasattr(e, 'response') and e.response is not None:
+            try:
+                error_body = e.response.json()
+                error_msg = f"{error_msg}. Response: {error_body}"
+            except:
+                error_msg = f"{error_msg}. Response body: {e.response.text[:500]}"
+        raise Exception(f"Polygon.io API request failed: {error_msg}")
+    except requests.exceptions.RequestException as e:
+        raise Exception(f"Polygon.io API request failed: {str(e)}")
+

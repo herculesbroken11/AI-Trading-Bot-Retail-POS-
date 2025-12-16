@@ -19,6 +19,8 @@ from api.optimization import optimization_bp
 from api.activity import activity_bp
 from api.vision import vision_bp
 from api.charts import charts_bp
+from api.polygon_data import polygon_data_bp
+from api.polygon_monitor import polygon_monitor_bp
 
 load_dotenv()
 
@@ -52,6 +54,8 @@ app.register_blueprint(optimization_bp)
 app.register_blueprint(activity_bp)
 app.register_blueprint(vision_bp)
 app.register_blueprint(charts_bp)
+app.register_blueprint(polygon_data_bp)
+app.register_blueprint(polygon_monitor_bp)
 
 @app.route('/', methods=['GET'])
 def index():

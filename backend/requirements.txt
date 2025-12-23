@@ -10,4 +10,8 @@ schedule==1.2.0
 gunicorn==21.2.0
 matplotlib>=3.7.0
 pytz==2024.1
+# Massive SDK dependencies (for client-python integration)
+urllib3>=1.26.9
+certifi>=2022.5.18,<2026.0.0
+websockets>=14.0
 

@@ -198,7 +198,8 @@ def polygon_api_request(
     api_key: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Fetch historical market data from Polygon.io API.
+    Fetch historical market data from Polygon.io/Massive API.
+    Uses the official SDK if available, otherwise falls back to simple implementation.
     
     Args:
         symbol: Stock symbol (e.g., 'AAPL')
@@ -210,6 +211,34 @@ def polygon_api_request(
     
     Returns:
         Dictionary with 'candles' array matching Schwab format
+    """
+    # Try to use the SDK wrapper first
+    try:
+        from utils.massive_client import polygon_api_request_v2
+        return polygon_api_request_v2(
+            symbol=symbol,
+            multiplier=multiplier,
+            timespan=timespan,
+            from_date=from_date,
+            to_date=to_date,
+            api_key=api_key
+        )
+    except (ImportError, Exception) as e:
+        # Fallback to simple implementation if SDK not available
+        logger.debug(f"SDK not available, using fallback implementation: {e}")
+        return _polygon_api_request_fallback(symbol, multiplier, timespan, from_date, to_date, api_key)
+
+
+def _polygon_api_request_fallback(
+    symbol: str,
+    multiplier: int,
+    timespan: str,
+    from_date: str,
+    to_date: str,
+    api_key: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Fallback implementation using simple requests (for when SDK is not available).
     """
     if api_key is None:
         api_key = os.getenv('POLYGON_API_KEY')

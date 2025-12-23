@@ -13,8 +13,8 @@ from core.position_manager import PositionManager
 from core.performance_analyzer import PerformanceAnalyzer
 from ai.analyze import TradingAIAnalyzer
 from api.orders import execute_signal_helper
-from utils.helpers import get_valid_access_token, schwab_api_request
-from api.quotes import SCHWAB_HISTORICAL_URL, SCHWAB_QUOTES_URL
+from utils.helpers import get_valid_access_token, schwab_api_request, polygon_api_request
+from api.quotes import SCHWAB_QUOTES_URL
 from api.activity import add_activity_log
 
 logger = setup_logger("scheduler")
@@ -113,20 +113,26 @@ class TradingScheduler:
             try:
                 add_activity_log('info', f'Analyzing {symbol}...', None, symbol)
                 
-                # Get historical data using Schwab API directly
-                params = {
-                    "symbol": symbol,
-                    "periodType": "day",
-                    "period": "1",
-                    "frequencyType": "minute",
-                    "frequency": "5",
-                    "needExtendedHoursData": "false"
-                }
+                # Get historical data using Polygon.io
+                import pytz
+                import pandas as pd
+                et = pytz.timezone('US/Eastern')
+                now_et = datetime.now(et)
+                to_date = now_et.date()
+                from_date = to_date - timedelta(days=0)  # Today's data
                 
-                url = SCHWAB_HISTORICAL_URL
-                # Token is automatically refreshed if needed by schwab_api_request
-                response = schwab_api_request("GET", url, access_token, params=params)
-                historical_data = response.json()
+                try:
+                    historical_data = polygon_api_request(
+                        symbol=symbol.upper(),
+                        multiplier=5,  # 5-minute bars
+                        timespan='minute',
+                        from_date=from_date.strftime('%Y-%m-%d'),
+                        to_date=to_date.strftime('%Y-%m-%d')
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to fetch data from Polygon.io for {symbol}: {e}")
+                    add_activity_log('error', f'{symbol}: Failed to fetch market data - {str(e)}', None, symbol)
+                    continue
                 
                 if not historical_data or 'candles' not in historical_data:
                     logger.warning(f"No data for {symbol}")
@@ -136,47 +142,20 @@ class TradingScheduler:
                 candles = historical_data['candles']
                 if not candles or len(candles) == 0:
                     logger.warning(f"Empty candles array for {symbol}")
+                    add_activity_log('warning', f'{symbol}: Empty market data', None, symbol)
                     continue
                 
-                # Convert to DataFrame - handle both dict and array formats
-                import pandas as pd
-                if isinstance(candles[0], dict):
-                    # Dictionary format - use directly
-                    df = pd.DataFrame(candles)
-                    if 'datetime' in df.columns:
-                        df['datetime'] = pd.to_datetime(df['datetime'], unit='ms')
-                    elif 'time' in df.columns:
-                        df['datetime'] = pd.to_datetime(df['time'], unit='ms')
-                        df = df.rename(columns={'time': 'datetime'})
+                # Convert to DataFrame - Polygon returns dict format
+                df = pd.DataFrame(candles)
+                if 'datetime' in df.columns:
+                    df['datetime'] = pd.to_datetime(df['datetime'], unit='ms')
+                elif 'time' in df.columns:
+                    df['datetime'] = pd.to_datetime(df['time'], unit='ms')
+                    df = df.rename(columns={'time': 'datetime'})
                 else:
-                    # Array format - need to detect column order (same logic as quotes.py)
-                    df = pd.DataFrame(candles)
-                    if len(df.columns) == 6:
-                        # Auto-detect column order
-                        raw_values = [float(df.iloc[0, i]) for i in range(6)]
-                        datetime_idx = raw_values.index(max(raw_values))
-                        non_datetime = [(i, v) for i, v in enumerate(raw_values) if i != datetime_idx]
-                        volume_candidates = [(i, v) for i, v in non_datetime if 1e6 <= v < 1e10]
-                        volume_idx = volume_candidates[0][0] if volume_candidates else non_datetime[-1][0]
-                        price_indices = [i for i in range(6) if i not in [datetime_idx, volume_idx]]
-                        price_vals = [(i, raw_values[i]) for i in price_indices]
-                        price_vals.sort(key=lambda x: x[1])
-                        low_idx = price_vals[0][0]
-                        high_idx = price_vals[-1][0]
-                        open_idx = price_vals[1][0] if len(price_vals) > 1 else price_indices[0]
-                        close_idx = price_vals[2][0] if len(price_vals) > 2 else price_indices[1]
-                        col_map = [''] * 6
-                        col_map[datetime_idx] = 'datetime'
-                        col_map[open_idx] = 'open'
-                        col_map[high_idx] = 'high'
-                        col_map[low_idx] = 'low'
-                        col_map[close_idx] = 'close'
-                        col_map[volume_idx] = 'volume'
-                        df.columns = col_map
-                        df['datetime'] = pd.to_datetime(df['datetime'], unit='ms')
-                    else:
-                        logger.warning(f"Unexpected candle format for {symbol}: {len(df.columns)} columns")
-                        continue
+                    logger.warning(f"No datetime column found for {symbol}")
+                    add_activity_log('warning', f'{symbol}: Invalid data format', None, symbol)
+                    continue
                 
                 # Ensure numeric types
                 for col in ['open', 'high', 'low', 'close', 'volume']:
@@ -501,13 +480,23 @@ class TradingScheduler:
                 logger.warning("Not authenticated - skipping parameter optimization")
                 return
             
-            # Get prices for watchlist symbols
+            # Get prices for watchlist symbols using Polygon.io
+            import pytz
+            et = pytz.timezone('US/Eastern')
+            now_et = datetime.now(et)
+            to_date = now_et.date()
+            from_date = to_date - timedelta(days=0)  # Today's data
+            
             recent_prices = []
             for symbol in self.watchlist[:5]:  # Use first 5 symbols
                 try:
-                    url = f"{SCHWAB_HISTORICAL_URL}?symbol={symbol}&periodType=day&period=1&frequencyType=minute&frequency=5"
-                    response = schwab_api_request("GET", url, access_token)
-                    data = response.json()
+                    data = polygon_api_request(
+                        symbol=symbol.upper(),
+                        multiplier=5,  # 5-minute bars
+                        timespan='minute',
+                        from_date=from_date.strftime('%Y-%m-%d'),
+                        to_date=to_date.strftime('%Y-%m-%d')
+                    )
                     
                     # Extract close prices
                     if isinstance(data, dict) and 'candles' in data:

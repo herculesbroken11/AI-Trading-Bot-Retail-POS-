@@ -111,15 +111,26 @@ def optimize_parameters():
             return jsonify({"error": "TRADING_WATCHLIST is empty. Please set it in .env file."}), 400
         
         # Get recent prices for volatility calculation
-        from api.quotes import SCHWAB_HISTORICAL_URL
-        from utils.helpers import schwab_api_request
+        from utils.helpers import polygon_api_request
+        import pytz
+        from datetime import datetime, timedelta
+        
+        # Get prices using Polygon.io
+        et = pytz.timezone('US/Eastern')
+        now_et = datetime.now(et)
+        to_date = now_et.date()
+        from_date = to_date - timedelta(days=0)  # Today's data
         
         recent_prices = []
         for symbol in watchlist[:5]:  # Use first 5 symbols
             try:
-                url = f"{SCHWAB_HISTORICAL_URL}?symbol={symbol}&periodType=day&period=1&frequencyType=minute&frequency=5"
-                response = schwab_api_request("GET", url, access_token)
-                data = response.json()
+                data = polygon_api_request(
+                    symbol=symbol.upper(),
+                    multiplier=5,  # 5-minute bars
+                    timespan='minute',
+                    from_date=from_date.strftime('%Y-%m-%d'),
+                    to_date=to_date.strftime('%Y-%m-%d')
+                )
                 
                 if isinstance(data, dict) and 'candles' in data:
                     prices = [c.get('close', 0) for c in data['candles'] if c.get('close')]

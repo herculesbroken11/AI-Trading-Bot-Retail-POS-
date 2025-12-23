@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 from pathlib import Path
 from utils.logger import setup_logger
-from utils.helpers import load_tokens, schwab_api_request, save_tokens
+from utils.helpers import load_tokens, schwab_api_request, save_tokens, polygon_api_request
 from core.ov_engine import OVStrategyEngine
 
 quotes_bp = Blueprint('quotes', __name__, url_prefix='/quotes')
@@ -153,7 +153,7 @@ def get_quote_single(symbol_id: str):
 @quotes_bp.route('/historical/<symbol>', methods=['GET'])
 def get_historical(symbol: str):
     """
-    Get historical price data for a symbol.
+    Get historical price data for a symbol using Polygon.io.
     
     Query params:
         periodType: day, month, year, ytd
@@ -161,30 +161,46 @@ def get_historical(symbol: str):
         frequencyType: minute, daily, weekly, monthly
         frequency: 1, 5, 10, 15, 30
     """
-    tokens = load_tokens()
-    if not tokens or 'access_token' not in tokens:
-        return jsonify({"error": "Not authenticated"}), 401
-    
     # Default parameters for intraday data
     period_type = request.args.get('periodType', 'day')
-    period = request.args.get('period', '1')
+    period = int(request.args.get('period', '1'))
     frequency_type = request.args.get('frequencyType', 'minute')
-    frequency = request.args.get('frequency', '1')  # Default to 1 minute
+    frequency = int(request.args.get('frequency', '1'))  # Default to 1 minute
     
     try:
-        params = {
-            "symbol": symbol,
-            "periodType": period_type,
-            "period": period,
-            "frequencyType": frequency_type,
-            "frequency": frequency,
-            "needExtendedHoursData": "false"
-        }
+        # Calculate date range for Polygon.io API
+        # Polygon.io requires from_date and to_date in YYYY-MM-DD format
+        import pytz
+        et = pytz.timezone('US/Eastern')
+        now_et = datetime.now(et)
         
-        url = SCHWAB_HISTORICAL_URL
-        logger.info(f"Requesting historical data: {params}")
-        response = schwab_api_request("GET", url, tokens['access_token'], params=params)
-        data = response.json()
+        # Calculate end date (today)
+        to_date = now_et.date()
+        
+        # Calculate start date based on period_value and period_type
+        if period_type == 'day':
+            from_date = to_date - timedelta(days=period - 1)  # -1 because we include today
+        elif period_type == 'week':
+            from_date = to_date - timedelta(weeks=period - 1)
+        elif period_type == 'month':
+            from_date = to_date - timedelta(days=30 * (period - 1))
+        elif period_type == 'year':
+            from_date = to_date - timedelta(days=365 * (period - 1))
+        else:
+            from_date = to_date - timedelta(days=period - 1)
+        
+        # Map frequency_type to Polygon timespan
+        timespan = 'minute' if frequency_type == 'minute' else 'day'
+        
+        # Request historical data from Polygon.io
+        logger.info(f"Fetching data from Polygon.io for {symbol}: {from_date} to {to_date}, frequency: {frequency}min")
+        data = polygon_api_request(
+            symbol=symbol.upper(),
+            multiplier=frequency,
+            timespan=timespan,
+            from_date=from_date.strftime('%Y-%m-%d'),
+            to_date=to_date.strftime('%Y-%m-%d')
+        )
         
         # Convert to DataFrame if candles are present
         if 'candles' in data:
@@ -284,42 +300,6 @@ def get_historical(symbol: str):
         
         return jsonify(data), 200
     except Exception as e:
-        # If 401 error, try to refresh token and retry
-        if "401" in str(e) or "Unauthorized" in str(e):
-            logger.warning("401 error detected, attempting token refresh...")
-            try:
-                from api.auth import refresh_access_token
-                if tokens.get('refresh_token'):
-                    new_tokens = refresh_access_token(tokens['refresh_token'])
-                    save_tokens(new_tokens)
-                    logger.info("Token refreshed, retrying request...")
-                    # Retry with new token
-                    response = schwab_api_request("GET", url, new_tokens['access_token'], params=params)
-                    data = response.json()
-                    # Re-process the data (same logic as above)
-                    if 'candles' in data:
-                        if not data['candles'] or len(data['candles']) == 0:
-                            return jsonify({
-                                "error": "No candle data available",
-                                "symbol": symbol,
-                                "message": "Historical data request returned empty candles array"
-                            }), 404
-                        # ... (same processing logic would go here, but for brevity, we'll return the raw data)
-                        logger.info(f"Retrieved historical data for {symbol} after token refresh")
-                        return jsonify(data), 200
-                    return jsonify(data), 200
-                else:
-                    return jsonify({
-                        "error": "Token expired. Please re-authenticate.",
-                        "re_auth_url": "/auth/login"
-                    }), 401
-            except Exception as refresh_error:
-                logger.error(f"Token refresh failed: {refresh_error}")
-                return jsonify({
-                    "error": "Token expired and refresh failed. Please re-authenticate.",
-                    "re_auth_url": "/auth/login"
-                }), 401
-        
         logger.error(f"Failed to get historical data for {symbol}: {e}")
         import traceback
         logger.error(traceback.format_exc())
@@ -329,52 +309,50 @@ def get_historical(symbol: str):
 def analyze_symbol(symbol: str):
     """
     Get quote, historical data, and strategy analysis for a symbol.
+    Historical data uses Polygon.io, quotes use Schwab API.
     """
     tokens = load_tokens()
     if not tokens or 'access_token' not in tokens:
         return jsonify({"error": "Not authenticated"}), 401
     
     try:
-        # Get historical data - use valid parameter combinations
-        # For intraday minute data, use periodType=day with appropriate period
-        # Try with extended hours data if needed
-        params = {
-            "symbol": symbol,
-            "periodType": "day",
-            "period": "1",
-            "frequencyType": "minute",
-            "frequency": "1",  # Try frequency=1 first (more common)
-            "needExtendedHoursData": "false"
-        }
+        # Get historical data from Polygon.io
+        import pytz
+        et = pytz.timezone('US/Eastern')
+        now_et = datetime.now(et)
+        to_date = now_et.date()
+        from_date = to_date - timedelta(days=0)  # Today's data
         
-        url = SCHWAB_HISTORICAL_URL
-        logger.info(f"Requesting historical data for {symbol} with params: {params}")
-        
+        # Try frequency=1 first, fallback to frequency=5 if needed
+        frequency = 1
         try:
-            response = schwab_api_request("GET", url, tokens['access_token'], params=params)
-            data = response.json()
+            logger.info(f"Fetching data from Polygon.io for {symbol}: {from_date} to {to_date}, frequency: {frequency}min")
+            data = polygon_api_request(
+                symbol=symbol.upper(),
+                multiplier=frequency,
+                timespan='minute',
+                from_date=from_date.strftime('%Y-%m-%d'),
+                to_date=to_date.strftime('%Y-%m-%d')
+            )
         except Exception as e:
             # If frequency=1 fails, try frequency=5
-            if "frequency" in str(e).lower() or "400" in str(e):
-                logger.warning("Frequency=1 failed, trying frequency=5")
-                params["frequency"] = "5"
-                try:
-                    response = schwab_api_request("GET", url, tokens['access_token'], params=params)
-                    data = response.json()
-                except Exception as e2:
-                    logger.error(f"Historical data request failed with both frequencies: {e2}")
-                    return jsonify({
-                        "error": "Failed to retrieve historical data",
-                        "details": str(e2),
-                        "symbol": symbol,
-                        "suggestion": "Check if market is open or try a different symbol"
-                    }), 500
-            else:
-                logger.error(f"Historical data request failed: {e}")
+            logger.warning(f"Frequency=1 failed, trying frequency=5: {e}")
+            frequency = 5
+            try:
+                data = polygon_api_request(
+                    symbol=symbol.upper(),
+                    multiplier=frequency,
+                    timespan='minute',
+                    from_date=from_date.strftime('%Y-%m-%d'),
+                    to_date=to_date.strftime('%Y-%m-%d')
+                )
+            except Exception as e2:
+                logger.error(f"Historical data request failed with both frequencies: {e2}")
                 return jsonify({
                     "error": "Failed to retrieve historical data",
-                    "details": str(e),
-                    "symbol": symbol
+                    "details": str(e2),
+                    "symbol": symbol,
+                    "suggestion": "Check if market is open or try a different symbol"
                 }), 500
         
         # Log the response structure for debugging
@@ -395,18 +373,16 @@ def analyze_symbol(symbol: str):
             
             # Try getting data for previous day if today has no data
             # This can happen if market is closed or it's before market open
-            logger.info(f"Trying to get data for previous day (period=2) for {symbol}")
+            logger.info(f"Trying to get data for previous day for {symbol}")
             try:
-                params_prev = {
-                    "symbol": symbol,
-                    "periodType": "day",
-                    "period": "2",  # Try 2 days to get yesterday's data
-                    "frequencyType": "minute",
-                    "frequency": "5",
-                    "needExtendedHoursData": "false"
-                }
-                response_prev = schwab_api_request("GET", url, tokens['access_token'], params=params_prev)
-                data_prev = response_prev.json()
+                from_date_prev = to_date - timedelta(days=1)
+                data_prev = polygon_api_request(
+                    symbol=symbol.upper(),
+                    multiplier=5,
+                    timespan='minute',
+                    from_date=from_date_prev.strftime('%Y-%m-%d'),
+                    to_date=from_date_prev.strftime('%Y-%m-%d')
+                )
                 candles_prev = data_prev.get('candles', [])
                 
                 if candles_prev and len(candles_prev) > 0:
@@ -627,7 +603,8 @@ def analyze_symbol(symbol: str):
             "warning": "Insufficient data for full analysis" if len(df) < 200 else None
         }), 200
     except Exception as e:
-        # If 401 error, try to refresh token and retry
+        # Note: Historical data uses Polygon (no auth needed), but quotes use Schwab (auth required)
+        # If 401 error, it's likely from the quote endpoint, try to refresh token
         if "401" in str(e) or "Unauthorized" in str(e):
             logger.warning("401 error detected, attempting token refresh...")
             try:
@@ -635,26 +612,12 @@ def analyze_symbol(symbol: str):
                 if tokens.get('refresh_token'):
                     new_tokens = refresh_access_token(tokens['refresh_token'])
                     save_tokens(new_tokens)
-                    logger.info("Token refreshed, retrying analyze request...")
-                    # Retry the entire analyze flow with new token
-                    # (This is a simplified retry - in production, you might want to refactor)
-                    try:
-                        response = schwab_api_request("GET", SCHWAB_HISTORICAL_URL, new_tokens['access_token'], params=params)
-                        data = response.json()
-                        if 'candles' not in data or not data['candles']:
-                            return jsonify({"error": "No historical data available after retry"}), 404
-                        # Return basic data - full processing would require refactoring
-                        return jsonify({
-                            "symbol": symbol,
-                            "message": "Token refreshed successfully. Please retry the request.",
-                            "re_auth_required": False
-                        }), 200
-                    except Exception as retry_error:
-                        logger.error(f"Retry after token refresh failed: {retry_error}")
-                        return jsonify({
-                            "error": "Request failed after token refresh. Please retry.",
-                            "re_auth_required": False
-                        }), 500
+                    logger.info("Token refreshed successfully. Please retry the request.")
+                    return jsonify({
+                        "symbol": symbol,
+                        "message": "Token refreshed successfully. Please retry the request.",
+                        "re_auth_required": False
+                    }), 200
                 else:
                     return jsonify({
                         "error": "Token expired. Please re-authenticate.",

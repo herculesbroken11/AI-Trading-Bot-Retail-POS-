@@ -6,7 +6,7 @@ import os
 import threading
 import time
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Any
 from utils.logger import setup_logger
 from core.polygon_streamer import PolygonStreamer
 from core.data_normalizer import process_and_store_bar

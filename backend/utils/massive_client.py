@@ -19,8 +19,9 @@ try:
     from massive import RESTClient
     from massive.exceptions import AuthError, BadResponse
     SDK_AVAILABLE = True
-except ImportError as e:
-    logger.warning(f"Massive SDK not available: {e}. Falling back to simple implementation.")
+except ImportError:
+    # SDK not available - this is expected if client-python directory is removed
+    # Don't log as warning, just silently mark as unavailable
     SDK_AVAILABLE = False
     RESTClient = None
     AuthError = Exception
@@ -152,8 +153,7 @@ def polygon_api_request_v2(
         Dictionary with 'candles' array matching Schwab format
     """
     if not SDK_AVAILABLE:
-        # Fallback to simple implementation if SDK not available
-        logger.warning("SDK not available, this function requires the SDK")
+        # Raise ImportError to trigger fallback in helpers.py
         raise ImportError("Massive SDK not available")
     
     client = MassiveClientWrapper(api_key=api_key)

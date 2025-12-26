@@ -223,9 +223,12 @@ def polygon_api_request(
             to_date=to_date,
             api_key=api_key
         )
-    except (ImportError, Exception) as e:
-        # Fallback to simple implementation if SDK not available
-        logger.debug(f"SDK not available, using fallback implementation: {e}")
+    except ImportError:
+        # SDK not available - silently fallback (this is expected if client-python is removed)
+        return _polygon_api_request_fallback(symbol, multiplier, timespan, from_date, to_date, api_key)
+    except Exception as e:
+        # SDK available but request failed - log and fallback
+        logger.warning(f"SDK request failed, using fallback: {e}")
         return _polygon_api_request_fallback(symbol, multiplier, timespan, from_date, to_date, api_key)
 
 
@@ -284,12 +287,20 @@ def _polygon_api_request_fallback(
         
     except requests.exceptions.HTTPError as e:
         error_msg = str(e)
+        status_code = None
         if hasattr(e, 'response') and e.response is not None:
+            status_code = e.response.status_code
             try:
                 error_body = e.response.json()
                 error_msg = f"{error_msg}. Response: {error_body}"
             except:
                 error_msg = f"{error_msg}. Response body: {e.response.text[:500]}"
+        
+        # Handle rate limiting (429) with a more helpful message
+        if status_code == 429:
+            logger.warning(f"Polygon.io rate limit exceeded for {symbol}. Consider upgrading subscription or reducing request frequency.")
+            raise Exception(f"Polygon.io rate limit exceeded. Please wait or upgrade your subscription. https://polygon.io/pricing")
+        
         raise Exception(f"Polygon.io API request failed: {error_msg}")
     except requests.exceptions.RequestException as e:
         raise Exception(f"Polygon.io API request failed: {str(e)}")

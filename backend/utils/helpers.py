@@ -248,8 +248,13 @@ def _polygon_api_request_fallback(
         if not api_key:
             raise Exception("POLYGON_API_KEY not found in environment variables")
     
-    # Polygon.io REST API endpoint
-    base_url = "https://api.polygon.io/v2/aggs/ticker"
+    # Massive.com REST API endpoint (formerly Polygon.io)
+    # Both api.massive.com and api.polygon.io work, but using massive.com as default
+    base_url = os.getenv('POLYGON_BASE_URL', 'https://api.massive.com/v2/aggs/ticker')
+    if not base_url.startswith('http'):
+        # If just the base domain is provided, construct full URL
+        if base_url == 'https://api.massive.com' or base_url == 'https://api.polygon.io':
+            base_url = f"{base_url}/v2/aggs/ticker"
     url = f"{base_url}/{symbol.upper()}/range/{multiplier}/{timespan}/{from_date}/{to_date}"
     
     params = {

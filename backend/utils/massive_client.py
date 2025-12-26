@@ -49,8 +49,8 @@ class MassiveClientWrapper:
                 raise ValueError("POLYGON_API_KEY or MASSIVE_API_KEY not found in environment variables")
         
         # Use api.massive.com (new) or api.polygon.io (legacy)
-        # The SDK defaults to api.massive.com, but we can use polygon.io for compatibility
-        base_url = os.getenv('POLYGON_BASE_URL', 'https://api.polygon.io')
+        # Both work, but massive.com is the new default
+        base_url = os.getenv('POLYGON_BASE_URL', 'https://api.massive.com')
         
         self.client = RESTClient(
             api_key=api_key,

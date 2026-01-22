@@ -124,10 +124,17 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
           second: '2-digit',
           hour12: true
         })
+        const etTime24 = date.toLocaleString('en-US', {
+          timeZone: 'America/New_York',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false
+        })
         console.log(`Candle timestamp: ${timestamp} (Unix seconds)`)
         console.log(`  UTC: ${utcTime}`)
-        console.log(`  ET:  ${etTime}`)
+        console.log(`  ET:  ${etTime} (${etTime24})`)
         console.log(`  Chart should display: ${etTime} (ET timezone)`)
+        console.log(`  Chart timezone setting: America/New_York`)
       }
       
       return {
@@ -286,10 +293,15 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
       volumeSeriesRef.current.applyOptions({ visible: false })
     }
 
-    // Fit content
+    // Re-apply timezone setting after data update to ensure it's still active
     if (chartInstanceRef.current) {
+      chartInstanceRef.current.timeScale().applyOptions({
+        timeZone: 'America/New_York',
+        timeVisible: true,
+        secondsVisible: false
+      })
       chartInstanceRef.current.timeScale().fitContent()
-      console.log('Chart content fitted')
+      console.log('Chart content fitted with ET timezone')
     }
   }
 
@@ -376,12 +388,30 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
         
         // Explicitly apply timezone setting to ensure ET timezone is used
         // This ensures the chart displays times in America/New_York timezone
+        // Set timezone explicitly - this must be done after chart creation
         chart.timeScale().applyOptions({
           timeZone: 'America/New_York',
           timeVisible: true,
           secondsVisible: false
         })
         console.log('Chart timezone set to America/New_York (ET)')
+        
+        // Listen for visible range changes to detect zoom out
+        // When user zooms out significantly, we can fetch more historical data
+        chart.timeScale().subscribeVisibleTimeRangeChange((timeRange) => {
+          if (timeRange && timeRange.from && timeRange.to) {
+            const fromDate = new Date(timeRange.from * 1000)
+            const toDate = new Date(timeRange.to * 1000)
+            const daysDiff = (toDate - fromDate) / (1000 * 60 * 60 * 24)
+            
+            // If user zooms out to see more than 15 days, fetch more historical data
+            if (daysDiff > 15 && viewMode === 'today') {
+              console.log(`User zoomed out to ${daysDiff.toFixed(1)} days, fetching more historical data...`)
+              // Note: For now, we'll just log this. In the future, we can implement
+              // a mechanism to fetch more data when zooming out significantly
+            }
+          }
+        })
 
         // Create candlestick series with very clear, visible candles
         const candlestickSeries = chart.addCandlestickSeries({
@@ -650,7 +680,7 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
     // Returns [periodValue, periodType, frequency]
     // Note: Schwab API only accepts [1, 5, 10, 15, 30] for minute frequency
     // Request enough days to ensure we have 200+ candles for SMA200 calculation
-    // After filtering to 8 AM - 4:10 PM ET, we get ~480 minutes per day
+    // After filtering to 8 AM - 4:30 PM ET, we get ~510 minutes per day
     switch (tf) {
       case '1min':
         return [10, 'day', 1]  // Request 10 days for enough data (480 candles/day)
@@ -1055,7 +1085,7 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
           Candles: {chartData.metadata.total_candles} | 
           Period: {chartData.metadata.period_type} | 
           Frequency: {chartData.metadata.frequency}min | 
-          Hours: 8:00 AM - 4:20 PM ET
+          Hours: 8:00 AM - 4:30 PM ET
         </div>
       )}
     </div>

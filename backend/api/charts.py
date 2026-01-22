@@ -228,31 +228,56 @@ def get_chart_data(symbol: str):
         # SIMPLIFIED: Always return all days with 8 AM - 4:30 PM filtering per day
         # This allows zooming out to see historical data across multiple days
         # No view mode filtering - just return all days in the requested period
+        # For today: show data up to current time (if before 4:30 PM) or up to 4:30 PM (if after)
         
-        # Filter each day to 8 AM - 4:30 PM ET, but include ALL days in the period
-        logger.info(f"Processing all days: Filtering each day to 8:00 AM - 4:30 PM ET, returning all {period_value} days")
+        current_time_only = now_et.time()
+        
+        logger.info(f"Processing all days: Filtering each day to 8:00 AM - 4:30 PM ET (today up to current time), returning all {period_value} days")
         logger.info(f"Total candles fetched from API: {len(df)}")
+        logger.info(f"Current time in ET: {now_et} (Hour: {current_hour}, Date: {current_date})")
         
         if len(df) > 0:
             unique_dates = sorted(df['datetime_et'].dt.date.unique())
             logger.info(f"Unique dates in fetched data: {unique_dates} (total: {len(unique_dates)} days)")
             
-            # Filter each day to 8 AM - 4:30 PM ET
+            # Filter each day to 8 AM - 4:30 PM ET (or current time for today)
             df_filtered_list = []
             for date in unique_dates:
+                # For today, use current time if before 4:30 PM, otherwise use 4:30 PM
+                if date == current_date:
+                    # Today: show up to current time (if before 4:30 PM) or 4:30 PM (if after)
+                    if current_time_only <= time_end:
+                        day_end_time = current_time_only  # Current time
+                        logger.info(f"Today ({date}): Filtering to 8:00 AM - {day_end_time.strftime('%I:%M %p')} ET (current time)")
+                    else:
+                        day_end_time = time_end  # 4:30 PM
+                        logger.info(f"Today ({date}): Filtering to 8:00 AM - 4:30 PM ET (after market close)")
+                else:
+                    # Historical days: always 8 AM - 4:30 PM
+                    day_end_time = time_end
+                
                 day_data = df[
                     (df['datetime_et'].dt.date == date) &
                     (df['datetime_et'].dt.time >= time_start) &
-                    (df['datetime_et'].dt.time <= time_end)
+                    (df['datetime_et'].dt.time <= day_end_time)
                 ].copy()
+                
                 if len(day_data) > 0:
                     df_filtered_list.append(day_data)
-                    logger.debug(f"Date {date}: {len(day_data)} candles (8 AM - 4:30 PM ET)")
+                    if date == current_date:
+                        logger.info(f"Today ({date}): {len(day_data)} candles (8 AM - {day_end_time.strftime('%I:%M %p')} ET)")
+                    else:
+                        logger.debug(f"Date {date}: {len(day_data)} candles (8 AM - 4:30 PM ET)")
+                else:
+                    if date == current_date:
+                        logger.warning(f"Today ({date}): No data found between 8:00 AM - {day_end_time.strftime('%I:%M %p')} ET")
+                    else:
+                        logger.debug(f"Date {date}: No data found (8 AM - 4:30 PM ET)")
             
             if df_filtered_list:
                 df_filtered = pd.concat(df_filtered_list, ignore_index=True).sort_values('datetime_et')
-                logger.info(f"Returning {len(df_filtered)} candles across {len(unique_dates)} days (each day: 8 AM - 4:30 PM ET)")
-                date_label = f"{len(unique_dates)} days (8:00 AM - 4:30 PM ET per day)"
+                logger.info(f"Returning {len(df_filtered)} candles across {len(unique_dates)} days (historical: 8 AM - 4:30 PM ET, today: up to current time)")
+                date_label = f"{len(unique_dates)} days (8:00 AM - 4:30 PM ET per day, today up to current time)"
             else:
                 logger.warning("No data found for any day in the requested period")
                 df_filtered = pd.DataFrame()  # Empty dataframe

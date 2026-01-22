@@ -547,7 +547,7 @@ class SchwabStreamer:
             if service in self.service_callbacks:
                 try:
                     self.service_callbacks[service](parsed)
-                except Exception as e:
+        except Exception as e:
                     logger.error(f"Error in screener callback: {e}")
     
     def _parse_screener_data(self, screener_data: Dict) -> Dict[str, Any]:
@@ -611,7 +611,7 @@ class SchwabStreamer:
         
         for symbol in symbols:
             symbol = symbol.upper()
-            if callback:
+        if callback:
                 self.subscriptions[service][symbol] = callback
         
         if service_callback:
@@ -835,12 +835,12 @@ def get_latest_chart_candle(symbol: str):
         }), 200  # Return 200 with has_data=false instead of 404
     
     if symbol_upper in latest_chart_data:
-        return jsonify({
+    return jsonify({
             "symbol": symbol_upper,
             "candle": latest_chart_data[symbol_upper],
             "has_data": True,
             "streamer_connected": True
-        }), 200
+    }), 200
     else:
         # Check if symbol is subscribed
         is_subscribed = (SERVICE_CHART_EQUITY in streamer.subscriptions and 

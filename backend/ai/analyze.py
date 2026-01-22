@@ -63,9 +63,9 @@ class TradingAIAnalyzer:
             
             # Prepare messages
             messages = [
-                {
-                    "role": "system",
-                    "content": self._get_system_prompt()
+                    {
+                        "role": "system",
+                        "content": self._get_system_prompt()
                 }
             ]
             
@@ -97,8 +97,8 @@ class TradingAIAnalyzer:
                 model = "gpt-4o"  # GPT-4o supports vision
             else:
                 messages.append({
-                    "role": "user",
-                    "content": prompt
+                        "role": "user",
+                        "content": prompt
                 })
                 model = self.model
             

@@ -119,15 +119,15 @@ class TradingScheduler:
                 from api.quotes import SCHWAB_HISTORICAL_URL
                 
                 try:
-                    params = {
+                params = {
                         "symbol": symbol.upper(),
-                        "periodType": "day",
+                    "periodType": "day",
                         "period": 1,
-                        "frequencyType": "minute",
+                    "frequencyType": "minute",
                         "frequency": 5
-                    }
+                }
                     response = schwab_api_request("GET", SCHWAB_HISTORICAL_URL, access_token, params=params)
-                    historical_data = response.json()
+                historical_data = response.json()
                 except Exception as e:
                     logger.error(f"Failed to fetch data from Schwab API for {symbol}: {e}")
                     add_activity_log('error', f'{symbol}: Failed to fetch market data - {str(e)}', None, symbol)
@@ -145,16 +145,16 @@ class TradingScheduler:
                     continue
                 
                 # Convert to DataFrame - Schwab returns array format
-                df = pd.DataFrame(candles)
-                if 'datetime' in df.columns:
-                    df['datetime'] = pd.to_datetime(df['datetime'], unit='ms')
-                elif 'time' in df.columns:
-                    df['datetime'] = pd.to_datetime(df['time'], unit='ms')
-                    df = df.rename(columns={'time': 'datetime'})
+                    df = pd.DataFrame(candles)
+                    if 'datetime' in df.columns:
+                        df['datetime'] = pd.to_datetime(df['datetime'], unit='ms')
+                    elif 'time' in df.columns:
+                        df['datetime'] = pd.to_datetime(df['time'], unit='ms')
+                        df = df.rename(columns={'time': 'datetime'})
                 else:
                     logger.warning(f"No datetime column found for {symbol}")
                     add_activity_log('warning', f'{symbol}: Invalid data format', None, symbol)
-                    continue
+                        continue
                 
                 # Ensure numeric types
                 for col in ['open', 'high', 'low', 'close', 'volume']:
@@ -225,7 +225,7 @@ class TradingScheduler:
                 # AI analysis with chart image (if available)
                 if not market_summary:
                     market_summary = self.ov_engine.get_market_summary(df)
-                ai_analyzer = self._get_ai_analyzer()
+                    ai_analyzer = self._get_ai_analyzer()
                 ai_signal = ai_analyzer.analyze_market_data(symbol, market_summary, setup, chart_image)
                 
                 # Store chart in cache for dashboard display

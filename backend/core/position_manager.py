@@ -36,8 +36,8 @@ class PositionManager:
             self.stop_distance_atr = params.get("stop_distance_atr", 1.5)
             self.target_distance_atr = params.get("target_distance_atr", 3.0)
         else:
-            self.trailing_stop_percent = 0.5  # Trail by 0.5 ATR
-            self.breakeven_profit_atr = 1.0  # Move to BE after 1 ATR profit
+        self.trailing_stop_percent = 0.5  # Trail by 0.5 ATR
+        self.breakeven_profit_atr = 1.0  # Move to BE after 1 ATR profit
             self.stop_distance_atr = 1.5
             self.target_distance_atr = 3.0
         

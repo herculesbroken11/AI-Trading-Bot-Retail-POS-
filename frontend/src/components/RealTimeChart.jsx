@@ -31,6 +31,10 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
   // Real-time streaming refs
   const realtimePollIntervalRef = useRef(null)
   const lastCandleTimeRef = useRef(null)
+  
+  // Track loaded data range for dynamic loading
+  const loadedDataRangeRef = useRef({ earliest: null, latest: null, periodValue: 0 })
+  const isLoadingOlderDataRef = useRef(false)
 
   useEffect(() => {
     // Load watchlist from automation status
@@ -487,21 +491,36 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
           }
         }
         
-        // Listen for visible range changes to detect zoom out
-        // Chart now shows all days by default (like the image showing days 17-22)
-        // When user zooms out, all available days are visible continuously
-        chart.timeScale().subscribeVisibleTimeRangeChange((timeRange) => {
-          if (timeRange && timeRange.from && timeRange.to) {
-            const fromDate = new Date(timeRange.from * 1000)
-            const toDate = new Date(timeRange.to * 1000)
-            const daysDiff = (toDate - fromDate) / (1000 * 60 * 60 * 24)
+        // Listen for visible range changes to detect zoom out and load older data
+        chart.timeScale().subscribeVisibleTimeRangeChange(async (timeRange) => {
+          if (!timeRange || !timeRange.from || !timeRange.to) return
+          
+          const fromTimestamp = timeRange.from * 1000 // Convert to milliseconds
+          const fromDate = new Date(fromTimestamp)
+          const toDate = new Date(timeRange.to * 1000)
+          const daysDiff = (toDate - fromDate) / (1000 * 60 * 60 * 24)
+          
+          console.log(`Chart visible range: ${daysDiff.toFixed(1)} days (from ${fromDate.toLocaleDateString()} to ${toDate.toLocaleDateString()})`)
+          
+          // Check if user zoomed out beyond loaded data
+          const loadedRange = loadedDataRangeRef.current
+          if (loadedRange.earliest && fromTimestamp < loadedRange.earliest) {
+            // User zoomed out to see older data - need to fetch more
+            const daysNeeded = Math.ceil((loadedRange.earliest - fromTimestamp) / (1000 * 60 * 60 * 24))
+            const currentPeriodValue = loadedRange.periodValue || 20
             
-            console.log(`Chart visible range: ${daysDiff.toFixed(1)} days (from ${fromDate.toLocaleDateString()} to ${toDate.toLocaleDateString()})`)
-            
-            // Chart shows all days continuously - zooming out reveals more days
-            // This matches the image showing multiple days (17-22) with continuous candles
-            if (daysDiff > 1) {
-              console.log(`Showing ${daysDiff.toFixed(1)} days of continuous data`)
+            // Only fetch if we're not already loading and we need significantly more data
+            if (!isLoadingOlderDataRef.current && daysNeeded > 5) {
+              console.log(`🔄 Zooming out: Need ${daysNeeded} more days of historical data (currently have ${currentPeriodValue} days)`)
+              isLoadingOlderDataRef.current = true
+              
+              try {
+                await loadOlderChartData(daysNeeded + currentPeriodValue)
+              } catch (error) {
+                console.error('Failed to load older chart data:', error)
+              } finally {
+                isLoadingOlderDataRef.current = false
+              }
             }
           }
         })
@@ -783,6 +802,16 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
         const daysDiff = (lastTime - firstTime) / (1000 * 60 * 60 * 24)
         console.log(`📥 Data spans ${daysDiff.toFixed(1)} days: ${firstTime.toLocaleDateString()} to ${lastTime.toLocaleDateString()}`)
         console.log(`📥 Should show all ${data.candles.length} candles when zoomed out`)
+        
+        // Update loaded data range tracking
+        const firstTimestamp = firstTime.getTime()
+        const lastTimestamp = lastTime.getTime()
+        loadedDataRangeRef.current = {
+          earliest: firstTimestamp,
+          latest: lastTimestamp,
+          periodValue: periodValue
+        }
+        console.log(`📊 Loaded data range: ${firstTime.toLocaleDateString()} to ${lastTime.toLocaleDateString()} (${periodValue} days)`)
       } else {
         console.warn(`⚠️ No candles received in chart data!`)
       }
@@ -801,24 +830,137 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
     // Note: Schwab API only accepts [1, 5, 10, 15, 30] for minute frequency
     // Request enough days to ensure we have 200+ candles for SMA200 calculation
     // After filtering to 8 AM - 4:30 PM ET, we get ~510 minutes per day
+    // Start with 20 days to allow zooming out before needing to fetch more
     switch (tf) {
       case '1min':
-        return [10, 'day', 1]  // Request 10 days for enough data (480 candles/day)
+        return [20, 'day', 1]  // Request 20 days for enough data (480 candles/day)
       case '2min':
         // 2min not supported, use 1min instead
-        return [10, 'day', 1]  // Request 10 days
+        return [20, 'day', 1]  // Request 20 days
       case '5min':
-        return [10, 'day', 5]  // Request 10 days (96 candles/day)
+        return [20, 'day', 5]  // Request 20 days (96 candles/day)
       case '15min':
-        return [10, 'day', 15]  // Request 10 days (32 candles/day)
+        return [20, 'day', 15]  // Request 20 days (32 candles/day)
       case '30min':
-        return [10, 'day', 30]  // Request 10 days (16 candles/day)
+        return [20, 'day', 30]  // Request 20 days (16 candles/day)
       case '1hour':
-        return [10, 'day', 60]
+        return [20, 'day', 60]
       case '1day':
         return [1, 'month', 1]
       default:
-        return [10, 'day', 1]  // Default to 10 days for enough data
+        return [20, 'day', 1]  // Default to 20 days for enough data
+    }
+  }
+  
+  // Load older historical data when user zooms out
+  const loadOlderChartData = async (newPeriodValue) => {
+    if (!selectedSymbol || isLoadingOlderDataRef.current) return
+    
+    // Validate that symbol is in watchlist
+    if (watchlist.length > 0 && !watchlist.includes(selectedSymbol.toUpperCase())) {
+      console.warn(`Symbol ${selectedSymbol} is not in TRADING_WATCHLIST, skipping older data load`)
+      return
+    }
+    
+    console.log(`🔄 Loading older historical data: ${newPeriodValue} days`)
+    setLoading(true)
+    
+    try {
+      // Parse timeframe
+      const [_, periodType, frequency] = parseTimeframe(timeframe)
+      
+      // Request more historical data
+      const urlParams = new URLSearchParams({
+        periodType,
+        periodValue: newPeriodValue.toString(),
+        frequencyType: 'minute',
+        frequency: frequency.toString()
+      })
+      
+      const response = await fetch(
+        `${window.location.origin}/charts/data/${selectedSymbol}?${urlParams.toString()}`
+      )
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+      
+      const newData = await response.json()
+      
+      if (!newData.candles || newData.candles.length === 0) {
+        console.warn('⚠️ No older data received')
+        return
+      }
+      
+      // Merge with existing data
+      const currentData = chartData
+      if (!currentData || !currentData.candles || currentData.candles.length === 0) {
+        // No existing data, just use new data
+        setChartData(newData)
+        return
+      }
+      
+      // Combine candles, removing duplicates and sorting by time
+      const existingCandles = currentData.candles || []
+      const newCandles = newData.candles || []
+      
+      // Create a map to deduplicate by timestamp
+      const candleMap = new Map()
+      
+      // Add existing candles
+      existingCandles.forEach(candle => {
+        const time = typeof candle.time === 'number' ? candle.time : new Date(candle.time).getTime()
+        candleMap.set(time, candle)
+      })
+      
+      // Add new candles (older ones will overwrite if there are duplicates)
+      newCandles.forEach(candle => {
+        const time = typeof candle.time === 'number' ? candle.time : new Date(candle.time).getTime()
+        // Only add if it's older than our earliest existing candle
+        const existingEarliest = loadedDataRangeRef.current.earliest
+        if (!existingEarliest || time < existingEarliest) {
+          candleMap.set(time, candle)
+        }
+      })
+      
+      // Convert map to sorted array
+      const mergedCandles = Array.from(candleMap.values()).sort((a, b) => {
+        const timeA = typeof a.time === 'number' ? a.time : new Date(a.time).getTime()
+        const timeB = typeof b.time === 'number' ? b.time : new Date(b.time).getTime()
+        return timeA - timeB
+      })
+      
+      // Merge indicators (use new data's indicators as they're calculated on the full dataset)
+      const mergedData = {
+        ...newData,
+        candles: mergedCandles
+      }
+      
+      // Update loaded data range
+      if (mergedCandles.length > 0) {
+        const firstTime = typeof mergedCandles[0].time === 'number' 
+          ? new Date(mergedCandles[0].time) 
+          : new Date(mergedCandles[0].time)
+        const lastTime = typeof mergedCandles[mergedCandles.length - 1].time === 'number'
+          ? new Date(mergedCandles[mergedCandles.length - 1].time)
+          : new Date(mergedCandles[mergedCandles.length - 1].time)
+        
+        loadedDataRangeRef.current = {
+          earliest: firstTime.getTime(),
+          latest: lastTime.getTime(),
+          periodValue: newPeriodValue
+        }
+        
+        console.log(`✅ Merged data: ${mergedCandles.length} candles (${existingCandles.length} existing + ${newCandles.length} new, ${mergedCandles.length - existingCandles.length - newCandles.length} duplicates removed)`)
+        console.log(`📊 Updated data range: ${firstTime.toLocaleDateString()} to ${lastTime.toLocaleDateString()} (${newPeriodValue} days)`)
+      }
+      
+      setChartData(mergedData)
+    } catch (err) {
+      console.error('Failed to load older chart data:', err)
+      setError(err.message)
+    } finally {
+      setLoading(false)
     }
   }
 

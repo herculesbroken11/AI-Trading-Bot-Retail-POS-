@@ -544,11 +544,11 @@ class SchwabStreamer:
             parsed = self._parse_screener_data(screener_data)
             parsed['service'] = service
             parsed['timestamp'] = timestamp
-        if service in self.service_callbacks:
-            try:
-                self.service_callbacks[service](parsed)
-            except Exception as e:
-                logger.error(f"Error in screener callback: {e}")
+            if service in self.service_callbacks:
+                try:
+                    self.service_callbacks[service](parsed)
+                except Exception as e:
+                    logger.error(f"Error in screener callback: {e}")
     
     def _parse_screener_data(self, screener_data: Dict) -> Dict[str, Any]:
         """Parse SCREENER services data."""

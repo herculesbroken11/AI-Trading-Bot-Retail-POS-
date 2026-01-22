@@ -827,28 +827,28 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
 
   const parseTimeframe = (tf) => {
     // Returns [periodValue, periodType, frequency]
-    // Note: Schwab API only accepts [1, 5, 10, 15, 30] for minute frequency
+    // IMPORTANT: Schwab API limits period values when periodType=day to [1, 2, 3, 4, 5, 10]
     // Request enough days to ensure we have 200+ candles for SMA200 calculation
     // After filtering to 8 AM - 4:30 PM ET, we get ~510 minutes per day
-    // Start with 20 days to allow zooming out before needing to fetch more
+    // Use maximum allowed value (10 days) to get as much data as possible
     switch (tf) {
       case '1min':
-        return [20, 'day', 1]  // Request 20 days for enough data (480 candles/day)
+        return [10, 'day', 1]  // Max 10 days (Schwab API limit) = ~5100 candles
       case '2min':
         // 2min not supported, use 1min instead
-        return [20, 'day', 1]  // Request 20 days
+        return [10, 'day', 1]  // Max 10 days
       case '5min':
-        return [20, 'day', 5]  // Request 20 days (96 candles/day)
+        return [10, 'day', 5]  // Max 10 days = ~1020 candles
       case '15min':
-        return [20, 'day', 15]  // Request 20 days (32 candles/day)
+        return [10, 'day', 15]  // Max 10 days = ~340 candles
       case '30min':
-        return [20, 'day', 30]  // Request 20 days (16 candles/day)
+        return [10, 'day', 30]  // Max 10 days = ~170 candles
       case '1hour':
-        return [20, 'day', 60]
+        return [10, 'day', 60]  // Max 10 days = ~85 candles
       case '1day':
         return [1, 'month', 1]
       default:
-        return [20, 'day', 1]  // Default to 20 days for enough data
+        return [10, 'day', 1]  // Default to max 10 days (Schwab API limit)
     }
   }
   
@@ -862,17 +862,32 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
       return
     }
     
-    console.log(`🔄 Loading older historical data: ${newPeriodValue} days`)
+    // IMPORTANT: Schwab API limits period to max 10 when periodType=day
+    // If user needs more than 10 days, we need to use a different periodType
+    const [_, periodType, frequency] = parseTimeframe(timeframe)
+    let actualPeriodValue = newPeriodValue
+    let actualPeriodType = periodType
+    
+    // If requesting more than 10 days with periodType=day, switch to month
+    if (periodType === 'day' && newPeriodValue > 10) {
+      // Convert days to months (approximate: 1 month ≈ 20 trading days)
+      actualPeriodType = 'month'
+      actualPeriodValue = Math.ceil(newPeriodValue / 20)
+      console.log(`⚠️ Requested ${newPeriodValue} days exceeds Schwab API limit (10 days). Using ${actualPeriodValue} month(s) instead.`)
+    } else if (periodType === 'day' && newPeriodValue > 10) {
+      // Cap at 10 if still using day
+      actualPeriodValue = 10
+      console.log(`⚠️ Capping period to 10 days (Schwab API limit for periodType=day)`)
+    }
+    
+    console.log(`🔄 Loading older historical data: ${actualPeriodValue} ${actualPeriodType}(s)`)
     setLoading(true)
     
     try {
-      // Parse timeframe
-      const [_, periodType, frequency] = parseTimeframe(timeframe)
-      
       // Request more historical data
       const urlParams = new URLSearchParams({
-        periodType,
-        periodValue: newPeriodValue.toString(),
+        periodType: actualPeriodType,
+        periodValue: actualPeriodValue.toString(),
         frequencyType: 'minute',
         frequency: frequency.toString()
       })

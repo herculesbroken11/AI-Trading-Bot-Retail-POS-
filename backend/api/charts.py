@@ -46,21 +46,33 @@ def get_chart_data(symbol: str):
         # view_mode = request.args.get('viewMode', 'today')  # No longer used
         # custom_date = request.args.get('customDate', None)  # No longer used
         
+        # IMPORTANT: Schwab API limits period values when periodType=day
+        # Valid values for periodType=day: [1, 2, 3, 4, 5, 10]
+        # We must cap period_value to 10 for day periodType
+        if period_type == 'day':
+            if period_value > 10:
+                logger.warning(f"period_value {period_value} exceeds Schwab API limit for periodType=day (max 10). Capping to 10.")
+                period_value = 10
+            elif period_value not in [1, 2, 3, 4, 5, 10]:
+                # Round to nearest valid value
+                valid_periods = [1, 2, 3, 4, 5, 10]
+                period_value = min(valid_periods, key=lambda x: abs(x - period_value))
+                logger.warning(f"period_value adjusted to nearest valid value: {period_value}")
+        
         # For MM200 calculation, we need at least 200 data points
         # After filtering to 8 AM - 4:30 PM ET, we get ~8.5 hours = ~510 minutes per day
         # For shorter timeframes, we need more days to ensure MM200 has enough data
         # Calculate minimum days needed: 200 candles / (510 minutes per day / frequency)
-        # BUT: For multi-day views (lastWeek/lastMonth), don't cap - return all requested data
         if frequency_type == 'minute' and frequency > 0:
             minutes_per_day = 510  # 8 AM - 4:30 PM = ~8.5 hours = 510 minutes
             candles_per_day = minutes_per_day / frequency
             min_days_needed = max(1, int(200 / candles_per_day) + 1)  # +1 for safety margin
             if period_value < min_days_needed:
                 logger.info(f"Increasing period_value from {period_value} to {min_days_needed} to ensure MM200 has enough data (frequency: {frequency}min)")
-                period_value = min_days_needed
-                # Cap at 20 days to ensure enough historical data for zoom out
-                period_value = min(period_value, 20)
-            logger.info(f"Requesting {period_value} days of data for historical chart display (allows zoom out)")
+                period_value = min(min_days_needed, 10)  # Cap at 10 (Schwab API limit for day)
+                if period_value < min_days_needed:
+                    logger.warning(f"Requested {min_days_needed} days but Schwab API limit is 10 days for periodType=day. MM200 may not be fully calculated.")
+            logger.info(f"Requesting {period_value} days of data for historical chart display (Schwab API limit: 10 days for periodType=day)")
         
         # Validate frequency for minute type
         # Schwab API accepts various frequencies, but we'll use standard ones

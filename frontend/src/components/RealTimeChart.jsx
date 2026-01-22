@@ -677,18 +677,46 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
     if (!symbol) return
     
     try {
-      // First, ensure Streamer is connected
-      const connectResponse = await fetch(`${window.location.origin}/streaming/connect`, {
-        method: 'POST'
-      })
-      
-      if (!connectResponse.ok) {
-        console.warn('Failed to connect to Streamer, real-time updates may not work')
-        return
+      // Check if Streamer is already connected
+      const statusResponse = await fetch(`${window.location.origin}/streaming/status`)
+      let isConnected = false
+      if (statusResponse.ok) {
+        const status = await statusResponse.json()
+        isConnected = status.connected && status.authenticated
       }
       
-      // Wait a bit for connection to establish
-      await new Promise(resolve => setTimeout(resolve, 1000))
+      // Only connect if not already connected
+      if (!isConnected) {
+        const connectResponse = await fetch(`${window.location.origin}/streaming/connect`, {
+          method: 'POST'
+        })
+        
+        if (!connectResponse.ok) {
+          console.debug(`Streamer connection failed for ${symbol}, real-time updates disabled`)
+          return
+        }
+        
+        // Wait for connection and authentication to complete
+        // Check status with retries
+        let retries = 10
+        while (retries > 0) {
+          await new Promise(resolve => setTimeout(resolve, 500))
+          const checkStatus = await fetch(`${window.location.origin}/streaming/status`)
+          if (checkStatus.ok) {
+            const status = await checkStatus.json()
+            if (status.connected && status.authenticated) {
+              isConnected = true
+              break
+            }
+          }
+          retries--
+        }
+        
+        if (!isConnected) {
+          console.debug(`Streamer did not connect in time for ${symbol}, real-time updates disabled`)
+          return
+        }
+      }
       
       // Subscribe to CHART_EQUITY for this symbol
       const subscribeResponse = await fetch(`${window.location.origin}/streaming/subscribe/CHART_EQUITY/${symbol}`, {
@@ -703,10 +731,11 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
         // Start polling for latest candle data
         startRealtimePolling(symbol)
       } else {
-        console.warn(`Failed to subscribe to real-time chart data for ${symbol}`)
+        const errorData = await subscribeResponse.json().catch(() => ({}))
+        console.debug(`Failed to subscribe to real-time chart data for ${symbol}: ${errorData.error || subscribeResponse.statusText}`)
       }
     } catch (error) {
-      console.error('Error subscribing to real-time chart:', error)
+      console.debug(`Error subscribing to real-time chart for ${symbol}: ${error.message}`)
     }
   }
 
@@ -735,9 +764,21 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
       clearInterval(realtimePollIntervalRef.current)
     }
     
-    // Poll every 1 second for latest candle
-    realtimePollIntervalRef.current = setInterval(async () => {
+    // Check Streamer status first
+    const checkAndPoll = async () => {
       try {
+        // Check if Streamer is connected
+        const statusResponse = await fetch(`${window.location.origin}/streaming/status`)
+        if (statusResponse.ok) {
+          const status = await statusResponse.json()
+          if (!status.connected || !status.authenticated) {
+            // Streamer not connected, don't poll
+            console.debug(`Streamer not connected for ${symbol}, skipping real-time polling`)
+            return
+          }
+        }
+        
+        // Poll for latest candle
         const response = await fetch(`${window.location.origin}/streaming/chart/latest/${symbol}`)
         if (response.ok) {
           const data = await response.json()
@@ -752,11 +793,24 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
               updateRealtimeCandle(candle)
             }
           }
+        } else if (response.status === 404) {
+          // 404 is expected when Streamer isn't connected or no data yet - silently skip
+          // Don't log as error, it's normal when Streamer isn't active
         }
       } catch (error) {
-        console.error('Error polling for real-time candle:', error)
+        // Only log non-404 errors
+        if (!error.message || !error.message.includes('404')) {
+          console.debug(`Real-time polling for ${symbol}: ${error.message}`)
+        }
       }
-    }, 1000) // Poll every 1 second
+    }
+    
+    // Poll every 2 seconds (reduced frequency to avoid too many requests)
+    // First check immediately
+    checkAndPoll()
+    
+    // Then set up interval
+    realtimePollIntervalRef.current = setInterval(checkAndPoll, 2000) // Poll every 2 seconds
   }
 
   const updateRealtimeCandle = (candle) => {

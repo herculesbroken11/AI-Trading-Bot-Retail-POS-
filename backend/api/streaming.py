@@ -763,19 +763,37 @@ def stream_status():
 def get_latest_chart_candle(symbol: str):
     """Get the latest real-time candle for a symbol."""
     symbol_upper = symbol.upper()
-    if symbol_upper in latest_chart_data:
-        return jsonify({
-            "symbol": symbol_upper,
-            "candle": latest_chart_data[symbol_upper],
-            "has_data": True
-        }), 200
-    else:
+    
+    # Check if Streamer is connected and authenticated
+    if not streamer.is_connected or not streamer.is_authenticated:
         return jsonify({
             "symbol": symbol_upper,
             "candle": None,
             "has_data": False,
-            "message": "No real-time data available. Ensure Streamer is connected and subscribed to CHART_EQUITY for this symbol."
-        }), 404
+            "streamer_connected": False,
+            "message": "Streamer not connected. Real-time data requires Streamer connection."
+        }), 200  # Return 200 with has_data=false instead of 404
+    
+    if symbol_upper in latest_chart_data:
+        return jsonify({
+            "symbol": symbol_upper,
+            "candle": latest_chart_data[symbol_upper],
+            "has_data": True,
+            "streamer_connected": True
+        }), 200
+    else:
+        # Check if symbol is subscribed
+        is_subscribed = (SERVICE_CHART_EQUITY in streamer.subscriptions and 
+                        symbol_upper in streamer.subscriptions[SERVICE_CHART_EQUITY])
+        
+        return jsonify({
+            "symbol": symbol_upper,
+            "candle": None,
+            "has_data": False,
+            "streamer_connected": True,
+            "is_subscribed": is_subscribed,
+            "message": "No real-time data available yet. Data will appear once Streamer receives candle updates for this symbol."
+        }), 200  # Return 200 with has_data=false instead of 404
 
 # Legacy endpoints for backward compatibility
 @streaming_bp.route('/subscribe/<symbol>', methods=['POST'])

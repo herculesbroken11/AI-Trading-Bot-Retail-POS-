@@ -145,16 +145,16 @@ class TradingScheduler:
                     continue
                 
                 # Convert to DataFrame - Schwab returns array format
-                    df = pd.DataFrame(candles)
-                    if 'datetime' in df.columns:
-                        df['datetime'] = pd.to_datetime(df['datetime'], unit='ms')
-                    elif 'time' in df.columns:
-                        df['datetime'] = pd.to_datetime(df['time'], unit='ms')
-                        df = df.rename(columns={'time': 'datetime'})
+                df = pd.DataFrame(candles)
+                if 'datetime' in df.columns:
+                    df['datetime'] = pd.to_datetime(df['datetime'], unit='ms')
+                elif 'time' in df.columns:
+                    df['datetime'] = pd.to_datetime(df['time'], unit='ms')
+                    df = df.rename(columns={'time': 'datetime'})
                 else:
                     logger.warning(f"No datetime column found for {symbol}")
                     add_activity_log('warning', f'{symbol}: Invalid data format', None, symbol)
-                        continue
+                    continue
                 
                 # Ensure numeric types
                 for col in ['open', 'high', 'low', 'close', 'volume']:

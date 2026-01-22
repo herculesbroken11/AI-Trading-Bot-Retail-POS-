@@ -36,11 +36,16 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
   }, [])
 
   useEffect(() => {
-    // Update selected symbol if prop changes
+    // Update selected symbol if prop changes, but only if it's in the watchlist
     if (propSymbol && propSymbol !== selectedSymbol) {
-      setSelectedSymbol(propSymbol)
+      // Only set if it's in the watchlist
+      if (watchlist.length === 0 || watchlist.includes(propSymbol.toUpperCase())) {
+        setSelectedSymbol(propSymbol)
+      } else {
+        console.warn(`Symbol ${propSymbol} is not in TRADING_WATCHLIST, ignoring`)
+      }
     }
-  }, [propSymbol])
+  }, [propSymbol, watchlist])
 
   useEffect(() => {
     if (propTimeframe && propTimeframe !== timeframe) {
@@ -527,14 +532,26 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
       if (watchlistData && watchlistData.watchlist && watchlistData.watchlist.length > 0) {
         console.log('Loaded watchlist from TRADING_WATCHLIST:', watchlistData.watchlist)
         setWatchlist(watchlistData.watchlist)
-        // Set first symbol from watchlist if no symbol provided
+        // Set first symbol from watchlist if no symbol provided or if current symbol is not in watchlist
         if (!propSymbol && watchlistData.watchlist.length > 0) {
+          setSelectedSymbol(watchlistData.watchlist[0])
+        } else if (propSymbol && !watchlistData.watchlist.includes(propSymbol.toUpperCase())) {
+          // If prop symbol is not in watchlist, use first watchlist symbol instead
+          console.warn(`Prop symbol ${propSymbol} not in TRADING_WATCHLIST, using ${watchlistData.watchlist[0]}`)
+          setSelectedSymbol(watchlistData.watchlist[0])
+        } else if (selectedSymbol && !watchlistData.watchlist.includes(selectedSymbol.toUpperCase())) {
+          // If current selected symbol is not in watchlist, use first watchlist symbol
+          console.warn(`Current symbol ${selectedSymbol} not in TRADING_WATCHLIST, using ${watchlistData.watchlist[0]}`)
           setSelectedSymbol(watchlistData.watchlist[0])
         }
       } else {
         console.error('TRADING_WATCHLIST is empty or not configured. Please set TRADING_WATCHLIST in .env file.')
         setError('No watchlist configured. Please set TRADING_WATCHLIST in .env file.')
         setWatchlist([])
+        // Clear selected symbol if watchlist is empty
+        if (selectedSymbol) {
+          setSelectedSymbol('')
+        }
       }
     } catch (error) {
       console.error('Failed to load watchlist from /charts/watchlist:', error)
@@ -545,6 +562,13 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
 
   const loadChartData = async () => {
     if (!selectedSymbol) return
+    
+    // Validate that symbol is in watchlist
+    if (watchlist.length > 0 && !watchlist.includes(selectedSymbol.toUpperCase())) {
+      console.warn(`Symbol ${selectedSymbol} is not in TRADING_WATCHLIST, skipping chart load`)
+      setError(`Symbol ${selectedSymbol} is not in trading watchlist. Only symbols from TRADING_WATCHLIST are allowed.`)
+      return
+    }
     
     setLoading(true)
     setError(null)
@@ -738,8 +762,18 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
             <h2 style={{ margin: 0 }}>Real-Time Chart:</h2>
             {watchlist.length > 0 && (
               <select
-                value={selectedSymbol}
-                onChange={(e) => setSelectedSymbol(e.target.value)}
+                value={watchlist.includes(selectedSymbol.toUpperCase()) ? selectedSymbol.toUpperCase() : watchlist[0]}
+                onChange={(e) => {
+                  const newSymbol = e.target.value.toUpperCase()
+                  // Ensure selected symbol is in watchlist
+                  if (watchlist.includes(newSymbol)) {
+                    setSelectedSymbol(newSymbol)
+                  } else {
+                    // Fallback to first symbol in watchlist if invalid
+                    console.warn(`Symbol ${newSymbol} not in watchlist, using ${watchlist[0]}`)
+                    setSelectedSymbol(watchlist[0])
+                  }
+                }}
                 style={{
                   padding: '8px 12px',
                   background: '#2a2f4a',
@@ -756,7 +790,9 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
               </select>
             )}
             {watchlist.length === 0 && (
-              <span style={{ color: '#667eea', fontWeight: 'bold' }}>{selectedSymbol}</span>
+              <span style={{ color: '#ef4444', fontWeight: 'bold' }}>
+                No watchlist configured. Please set TRADING_WATCHLIST in .env file.
+              </span>
             )}
           </div>
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>

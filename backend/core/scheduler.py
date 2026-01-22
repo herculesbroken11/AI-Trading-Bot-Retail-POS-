@@ -119,15 +119,15 @@ class TradingScheduler:
                 from api.quotes import SCHWAB_HISTORICAL_URL
                 
                 try:
-                params = {
+                    params = {
                         "symbol": symbol.upper(),
-                    "periodType": "day",
+                        "periodType": "day",
                         "period": 1,
-                    "frequencyType": "minute",
+                        "frequencyType": "minute",
                         "frequency": 5
-                }
+                    }
                     response = schwab_api_request("GET", SCHWAB_HISTORICAL_URL, access_token, params=params)
-                historical_data = response.json()
+                    historical_data = response.json()
                 except Exception as e:
                     logger.error(f"Failed to fetch data from Schwab API for {symbol}: {e}")
                     add_activity_log('error', f'{symbol}: Failed to fetch market data - {str(e)}', None, symbol)

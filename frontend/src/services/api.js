@@ -109,14 +109,14 @@ export async function getChartData(symbol, timeframe = '1min') {
   // The backend will automatically adjust period_value if needed
   const [periodValue, periodType, frequency] = (() => {
     switch (timeframe) {
-      case '1min': return [10, 'day', 1]  // Request 10 days for enough data (480 candles/day = ~4800 total, need 200 for MM200)
-      case '2min': return [10, 'day', 1]  // 2min not supported, use 1min instead, request 10 days
-      case '5min': return [10, 'day', 5]  // Request 10 days (96 candles/day = ~960 total, need 200 for MM200)
-      case '15min': return [10, 'day', 15]  // Request 10 days (32 candles/day = ~320 total, need 200 for MM200)
-      case '30min': return [10, 'day', 30]  // Request 10 days (16 candles/day = ~160 total, may need more)
-      case '1hour': return [10, 'day', 60]
+      case '1min': return [20, 'day', 1]  // Request 20 days for multi-day view when zoomed out
+      case '2min': return [20, 'day', 1]  // 2min not supported, use 1min instead, request 20 days
+      case '5min': return [20, 'day', 5]  // Request 20 days for multi-day view
+      case '15min': return [20, 'day', 15]  // Request 20 days for multi-day view
+      case '30min': return [20, 'day', 30]  // Request 20 days for multi-day view
+      case '1hour': return [20, 'day', 60]
       case '1day': return [1, 'month', 1]
-      default: return [10, 'day', 1]  // Default to 10 days for enough data
+      default: return [20, 'day', 1]  // Default to 20 days for multi-day view
     }
   })()
   

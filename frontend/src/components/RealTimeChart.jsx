@@ -117,6 +117,8 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
       if (candles.indexOf(c) === 0 || candles.indexOf(c) === candles.length - 1) {
         const date = new Date(timestamp * 1000)
         const utcTime = date.toISOString()
+        const utcHour = date.getUTCHours()
+        const utcMin = date.getUTCMinutes()
         const etTime = date.toLocaleString('en-US', { 
           timeZone: 'America/New_York',
           hour: '2-digit',
@@ -131,10 +133,11 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
           hour12: false
         })
         console.log(`Candle timestamp: ${timestamp} (Unix seconds)`)
-        console.log(`  UTC: ${utcTime}`)
+        console.log(`  UTC: ${utcTime} (${utcHour.toString().padStart(2, '0')}:${utcMin.toString().padStart(2, '0')})`)
         console.log(`  ET:  ${etTime} (${etTime24})`)
         console.log(`  Chart should display: ${etTime} (ET timezone)`)
         console.log(`  Chart timezone setting: America/New_York`)
+        console.warn(`⚠️ If chart shows ${utcHour}:${utcMin.toString().padStart(2, '0')} instead of ${etTime24}, timezone is NOT working!`)
       }
       
       return {
@@ -295,13 +298,35 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
 
     // Re-apply timezone setting after data update to ensure it's still active
     if (chartInstanceRef.current) {
-      chartInstanceRef.current.timeScale().applyOptions({
-        timeZone: 'America/New_York',
-        timeVisible: true,
-        secondsVisible: false
-      })
-      chartInstanceRef.current.timeScale().fitContent()
-      console.log('Chart content fitted with ET timezone')
+      try {
+        // Force timezone update - try both formats
+        const timeScale = chartInstanceRef.current.timeScale()
+        timeScale.applyOptions({
+          timeZone: 'America/New_York',
+          timeVisible: true,
+          secondsVisible: false
+        })
+        
+        // Verify timezone was applied
+        const currentOptions = timeScale.options()
+        console.log('Chart timezone after update:', currentOptions.timeZone)
+        
+        timeScale.fitContent()
+        console.log('Chart content fitted with ET timezone')
+      } catch (e) {
+        console.error('Error applying timezone after data update:', e)
+        // Try fallback
+        try {
+          chartInstanceRef.current.timeScale().applyOptions({
+            timeZone: 'US/Eastern',
+            timeVisible: true,
+            secondsVisible: false
+          })
+          chartInstanceRef.current.timeScale().fitContent()
+        } catch (e2) {
+          console.error('Failed to apply fallback timezone:', e2)
+        }
+      }
     }
   }
 
@@ -375,8 +400,8 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
             lockVisibleTimeRangeOnResize: false,
             rightBarStaysOnScroll: false,
             shiftVisibleRangeOnNewBar: false,
-            // Display times in ET timezone
-            timeZone: 'America/New_York',
+            // CRITICAL: Display times in ET timezone - must be set here AND after chart creation
+            timeZone: 'America/New_York', // Use America/New_York for ET timezone
             visible: true,
           },
           width: containerWidth,
@@ -386,29 +411,64 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
         chartInstanceRef.current = chart
         console.log('Chart instance created')
         
-        // Explicitly apply timezone setting to ensure ET timezone is used
-        // This ensures the chart displays times in America/New_York timezone
-        // Set timezone explicitly - this must be done after chart creation
-        chart.timeScale().applyOptions({
-          timeZone: 'America/New_York',
-          timeVisible: true,
-          secondsVisible: false
-        })
-        console.log('Chart timezone set to America/New_York (ET)')
+        // CRITICAL: Set timezone BEFORE adding any data or series
+        // TradingView Lightweight Charts requires timezone to be set early
+        // Try both timezone formats to ensure compatibility
+        try {
+          chart.timeScale().applyOptions({
+            timeZone: 'America/New_York', // Primary timezone format
+            timeVisible: true,
+            secondsVisible: false
+          })
+          // Verify timezone was actually set
+          const timeScaleOptions = chart.timeScale().options()
+          console.log('Chart timezone verification:', {
+            requested: 'America/New_York',
+            actual: timeScaleOptions.timeZone,
+            timeVisible: timeScaleOptions.timeVisible
+          })
+          
+          if (timeScaleOptions.timeZone !== 'America/New_York') {
+            console.error('⚠️ WARNING: Chart timezone was NOT set correctly!', {
+              expected: 'America/New_York',
+              actual: timeScaleOptions.timeZone
+            })
+          } else {
+            console.log('✓ Chart timezone successfully set to America/New_York (ET)')
+          }
+        } catch (e) {
+          console.error('Error setting timezone to America/New_York:', e)
+          // Fallback to US/Eastern if America/New_York doesn't work
+          try {
+            chart.timeScale().applyOptions({
+              timeZone: 'US/Eastern',
+              timeVisible: true,
+              secondsVisible: false
+            })
+            const timeScaleOptions = chart.timeScale().options()
+            console.log('Chart timezone set to US/Eastern (ET) - fallback', {
+              actual: timeScaleOptions.timeZone
+            })
+          } catch (e2) {
+            console.error('Failed to set chart timezone:', e2)
+          }
+        }
         
         // Listen for visible range changes to detect zoom out
-        // When user zooms out significantly, we can fetch more historical data
+        // Chart now shows all days by default (like the image showing days 17-22)
+        // When user zooms out, all available days are visible continuously
         chart.timeScale().subscribeVisibleTimeRangeChange((timeRange) => {
           if (timeRange && timeRange.from && timeRange.to) {
             const fromDate = new Date(timeRange.from * 1000)
             const toDate = new Date(timeRange.to * 1000)
             const daysDiff = (toDate - fromDate) / (1000 * 60 * 60 * 24)
             
-            // If user zooms out to see more than 15 days, fetch more historical data
-            if (daysDiff > 15 && viewMode === 'today') {
-              console.log(`User zoomed out to ${daysDiff.toFixed(1)} days, fetching more historical data...`)
-              // Note: For now, we'll just log this. In the future, we can implement
-              // a mechanism to fetch more data when zooming out significantly
+            console.log(`Chart visible range: ${daysDiff.toFixed(1)} days (from ${fromDate.toLocaleDateString()} to ${toDate.toLocaleDateString()})`)
+            
+            // Chart shows all days continuously - zooming out reveals more days
+            // This matches the image showing multiple days (17-22) with continuous candles
+            if (daysDiff > 1) {
+              console.log(`Showing ${daysDiff.toFixed(1)} days of continuous data`)
             }
           }
         })
@@ -658,8 +718,22 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
       // Parse timeframe
       const [periodValue, periodType, frequency] = parseTimeframe(timeframe)
       
+      // For multi-day view, use 'lastWeek' view mode to show all days without time filtering
+      // This allows the chart to display multiple days continuously when zoomed out
+      const viewModeParam = viewMode === 'today' ? 'lastWeek' : viewMode
+      const urlParams = new URLSearchParams({
+        periodType,
+        periodValue: periodValue.toString(),
+        frequencyType: 'minute',
+        frequency: frequency.toString(),
+        viewMode: viewModeParam
+      })
+      if (customDate) {
+        urlParams.set('customDate', customDate)
+      }
+      
       const response = await fetch(
-        `${window.location.origin}/charts/data/${selectedSymbol}?periodType=${periodType}&periodValue=${periodValue}&frequencyType=minute&frequency=${frequency}`
+        `${window.location.origin}/charts/data/${selectedSymbol}?${urlParams.toString()}`
       )
       
       if (!response.ok) {

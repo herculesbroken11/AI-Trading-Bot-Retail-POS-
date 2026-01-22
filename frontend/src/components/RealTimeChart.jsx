@@ -10,6 +10,8 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
   const [timeframe, setTimeframe] = useState(propTimeframe || '2min')
   const [selectedSymbol, setSelectedSymbol] = useState(propSymbol || '')
   const [watchlist, setWatchlist] = useState([])
+  const [viewMode, setViewMode] = useState('today') // 'today', 'yesterday', 'lastWeek', 'lastMonth', 'custom'
+  const [customDate, setCustomDate] = useState('')
   const [showIndicators, setShowIndicators] = useState({
     mm8: true,
     mm20: true,
@@ -56,8 +58,13 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
   useEffect(() => {
     if (selectedSymbol) {
       loadChartData()
-      // Subscribe to real-time chart data
-      subscribeToRealtimeChart(selectedSymbol)
+      // Only subscribe to real-time data if viewing today (not historical)
+      if (viewMode === 'today') {
+        subscribeToRealtimeChart(selectedSymbol)
+      } else {
+        // Unsubscribe if switching to historical view
+        unsubscribeFromRealtimeChart(selectedSymbol)
+      }
     }
     
     // Cleanup on unmount or symbol change
@@ -70,7 +77,7 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
         unsubscribeFromRealtimeChart(selectedSymbol)
       }
     }
-  }, [selectedSymbol, timeframe, lastUpdate])
+  }, [selectedSymbol, timeframe, lastUpdate, viewMode, customDate])
 
   // Function to update chart data
   const updateChartData = (data) => {
@@ -94,15 +101,35 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
     // Prepare candlestick data
     const candlestickData = candles.map(c => {
       // Handle both timestamp (number in ms) and ISO string formats
+      // Timestamps from backend are Unix timestamps in milliseconds (UTC-based)
+      // TradingView chart will display them in ET timezone based on timeZone setting
       let timestamp
       if (typeof c.time === 'number') {
-        timestamp = Math.floor(c.time / 1000) // Convert ms to seconds
+        timestamp = Math.floor(c.time / 1000) // Convert ms to seconds (TradingView expects seconds)
       } else if (typeof c.time === 'string') {
         timestamp = Math.floor(new Date(c.time).getTime() / 1000)
       } else {
         console.warn('Invalid candle time format:', c.time)
         timestamp = 0
       }
+      
+      // Debug: Log first and last timestamps to verify timezone conversion
+      if (candles.indexOf(c) === 0 || candles.indexOf(c) === candles.length - 1) {
+        const date = new Date(timestamp * 1000)
+        const utcTime = date.toISOString()
+        const etTime = date.toLocaleString('en-US', { 
+          timeZone: 'America/New_York',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: true
+        })
+        console.log(`Candle timestamp: ${timestamp} (Unix seconds)`)
+        console.log(`  UTC: ${utcTime}`)
+        console.log(`  ET:  ${etTime}`)
+        console.log(`  Chart should display: ${etTime} (ET timezone)`)
+      }
+      
       return {
         time: timestamp,
         open: parseFloat(c.open),
@@ -346,6 +373,15 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
 
         chartInstanceRef.current = chart
         console.log('Chart instance created')
+        
+        // Explicitly apply timezone setting to ensure ET timezone is used
+        // This ensures the chart displays times in America/New_York timezone
+        chart.timeScale().applyOptions({
+          timeZone: 'America/New_York',
+          timeVisible: true,
+          secondsVisible: false
+        })
+        console.log('Chart timezone set to America/New_York (ET)')
 
         // Create candlestick series with very clear, visible candles
         const candlestickSeries = chart.addCandlestickSeries({
@@ -431,6 +467,21 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
         })
 
         console.log('All chart series created successfully')
+        
+        // Verify and enforce timezone setting
+        // TradingView Lightweight Charts should use the timezone from timeScale config
+        // But we'll verify it's set correctly and reapply if needed
+        const currentTimezone = chart.timeScale().options().timeZone
+        console.log(`Chart timezone setting: ${currentTimezone || 'not set (defaults to browser timezone)'}`)
+        if (currentTimezone !== 'America/New_York') {
+          console.warn('Chart timezone not set to America/New_York, applying now...')
+          chart.timeScale().applyOptions({ 
+            timeZone: 'America/New_York',
+            timeVisible: true,
+            secondsVisible: false
+          })
+          console.log('Chart timezone explicitly set to America/New_York (ET)')
+        }
 
         // If data already exists, set it immediately
         if (chartData) {
@@ -795,7 +846,7 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
               </span>
             )}
           </div>
-          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
             <select
               value={timeframe}
               onChange={(e) => setTimeframe(e.target.value)}
@@ -808,10 +859,52 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
                 fontSize: '14px'
               }}
             >
+              <option value="1min">1 Min</option>
               <option value="2min">2 Min</option>
               <option value="5min">5 Min</option>
               <option value="15min">15 Min</option>
+              <option value="30min">30 Min</option>
+              <option value="1hour">1 Hour</option>
+              <option value="1day">1 Day</option>
             </select>
+            <select
+              value={viewMode}
+              onChange={(e) => {
+                setViewMode(e.target.value)
+                if (e.target.value !== 'custom') {
+                  setCustomDate('')
+                }
+              }}
+              style={{
+                padding: '8px 12px',
+                background: '#2a2f4a',
+                border: '1px solid #2a2f4a',
+                borderRadius: '5px',
+                color: '#e0e0e0',
+                fontSize: '14px'
+              }}
+            >
+              <option value="today">Today</option>
+              <option value="yesterday">Yesterday</option>
+              <option value="lastWeek">Last 5 Days</option>
+              <option value="lastMonth">Last 20 Days</option>
+              <option value="custom">Custom Date</option>
+            </select>
+            {viewMode === 'custom' && (
+              <input
+                type="date"
+                value={customDate}
+                onChange={(e) => setCustomDate(e.target.value)}
+                style={{
+                  padding: '8px 12px',
+                  background: '#2a2f4a',
+                  border: '1px solid #2a2f4a',
+                  borderRadius: '5px',
+                  color: '#e0e0e0',
+                  fontSize: '14px'
+                }}
+              />
+            )}
             <button
               onClick={loadChartData}
               disabled={loading}

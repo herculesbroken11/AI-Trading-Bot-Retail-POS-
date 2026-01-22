@@ -101,6 +101,8 @@ def get_chart_data(symbol: str):
         to_date = now_et.date()
         
         # Calculate start date based on period_value and period_type
+        # IMPORTANT: Schwab API period=10 with periodType=day means "last 10 days including today"
+        # So we need to go back (period_value - 1) days to include today
         if period_type == 'day':
             from_date = to_date - timedelta(days=period_value - 1)  # -1 because we include today
         elif period_type == 'week':
@@ -109,6 +111,8 @@ def get_chart_data(symbol: str):
             from_date = to_date - timedelta(days=30 * (period_value - 1))
         else:
             from_date = to_date - timedelta(days=period_value - 1)
+        
+        logger.info(f"Requesting data from {from_date} to {to_date} (period={period_value}, periodType={period_type})")
         
         # Request historical data from Schwab API
         tokens = load_tokens()
@@ -252,19 +256,28 @@ def get_chart_data(symbol: str):
         if len(df) > 0:
             unique_dates = sorted(df['datetime_et'].dt.date.unique())
             logger.info(f"Unique dates in fetched data: {unique_dates} (total: {len(unique_dates)} days)")
+            logger.info(f"Current date (ET): {current_date}")
+            logger.info(f"Is today in fetched data? {current_date in unique_dates}")
+            
+            # Check if today's data exists in the raw data
+            today_raw_data = df[df['datetime_et'].dt.date == current_date]
+            logger.info(f"Raw today's data (before filtering): {len(today_raw_data)} candles")
+            if len(today_raw_data) > 0:
+                logger.info(f"Today's data time range: {today_raw_data['datetime_et'].min()} to {today_raw_data['datetime_et'].max()}")
+            else:
+                logger.warning(f"⚠️ No raw data found for today ({current_date}) in API response!")
+                logger.warning(f"  This might mean: market hasn't opened yet, it's a weekend/holiday, or API doesn't return today's data")
             
             # Filter each day to 8 AM - 4:30 PM ET (or current time for today)
             df_filtered_list = []
             for date in unique_dates:
                 # For today, use current time if before 4:30 PM, otherwise use 4:30 PM
                 if date == current_date:
-                    # Today: show up to current time (if before 4:30 PM) or 4:30 PM (if after)
-                    if current_time_only <= time_end:
-                        day_end_time = current_time_only  # Current time
-                        logger.info(f"Today ({date}): Filtering to 8:00 AM - {day_end_time.strftime('%I:%M %p')} ET (current time)")
-                    else:
-                        day_end_time = time_end  # 4:30 PM
-                        logger.info(f"Today ({date}): Filtering to 8:00 AM - 4:30 PM ET (after market close)")
+                    # Today: Always show all available data up to 4:30 PM ET
+                    # Don't filter by current time - show all of today's data that exists
+                    # This ensures today's data is always visible regardless of when you check
+                    day_end_time = time_end  # Always use 4:30 PM for today
+                    logger.info(f"Today ({date}): Filtering to 8:00 AM - 4:30 PM ET (showing all available today's data)")
                 else:
                     # Historical days: always 8 AM - 4:30 PM
                     day_end_time = time_end
@@ -278,12 +291,21 @@ def get_chart_data(symbol: str):
                 if len(day_data) > 0:
                     df_filtered_list.append(day_data)
                     if date == current_date:
-                        logger.info(f"Today ({date}): {len(day_data)} candles (8 AM - {day_end_time.strftime('%I:%M %p')} ET)")
+                        logger.info(f"✓ Today ({date}): {len(day_data)} candles (8 AM - {day_end_time.strftime('%I:%M %p')} ET)")
                     else:
                         logger.debug(f"Date {date}: {len(day_data)} candles (8 AM - 4:30 PM ET)")
                 else:
                     if date == current_date:
-                        logger.warning(f"Today ({date}): No data found between 8:00 AM - {day_end_time.strftime('%I:%M %p')} ET")
+                        logger.warning(f"✗ Today ({date}): No data found between 8:00 AM - {day_end_time.strftime('%I:%M %p')} ET")
+                        # Check if there's any data for today at all (even outside market hours)
+                        today_any_data = df[df['datetime_et'].dt.date == current_date]
+                        if len(today_any_data) > 0:
+                            logger.warning(f"  But found {len(today_any_data)} candles for today outside market hours")
+                            logger.warning(f"  Time range: {today_any_data['datetime_et'].min()} to {today_any_data['datetime_et'].max()}")
+                            # If we have today's data but it's outside market hours, include it anyway
+                            # This handles pre-market or after-hours data
+                            logger.info(f"  Including today's data even though it's outside 8 AM - 4:30 PM ET range")
+                            df_filtered_list.append(today_any_data)
                     else:
                         logger.debug(f"Date {date}: No data found (8 AM - 4:30 PM ET)")
             

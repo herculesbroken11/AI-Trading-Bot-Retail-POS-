@@ -61,11 +61,16 @@ class SchwabStreamer:
     
     def _extract_streamer_config(self, prefs: Dict[str, Any], access_token: str):
         """Extract Streamer configuration from user preferences."""
+        # Log the full preferences structure for debugging
+        logger.debug(f"User preferences structure: {json.dumps(prefs, indent=2, default=str)}")
+        
+        # Extract WebSocket URL
         if 'streamerInfoUrl' in prefs:
             self.ws_url = prefs['streamerInfoUrl']
         elif 'streamerInfo' in prefs and isinstance(prefs['streamerInfo'], dict):
             self.ws_url = prefs['streamerInfo'].get('url') or prefs['streamerInfo'].get('streamerInfoUrl')
         else:
+            # Search nested structures
             for key, value in prefs.items():
                 if isinstance(value, dict) and 'streamerInfoUrl' in value:
                     self.ws_url = value['streamerInfoUrl']
@@ -73,17 +78,55 @@ class SchwabStreamer:
         
         if not self.ws_url:
             self.ws_url = os.getenv("SCHWAB_WS_URL", "wss://streamer.schwab.com")
-            logger.warning(f"streamerInfoUrl not found, using default: {self.ws_url}")
+            logger.warning(f"streamerInfoUrl not found in preferences, using default: {self.ws_url}")
         
-        self.schwab_client_customer_id = prefs.get('schwabClientCustomerId') or prefs.get('customerId')
+        # Extract Customer ID - try multiple possible field names
+        self.schwab_client_customer_id = (
+            prefs.get('schwabClientCustomerId') or 
+            prefs.get('customerId') or
+            prefs.get('clientId') or
+            prefs.get('accountNumber')
+        )
+        
+        # Also check in streamerInfo nested object
         if not self.schwab_client_customer_id and 'streamerInfo' in prefs:
             if isinstance(prefs['streamerInfo'], dict):
-                self.schwab_client_customer_id = prefs['streamerInfo'].get('schwabClientCustomerId')
+                self.schwab_client_customer_id = (
+                    prefs['streamerInfo'].get('schwabClientCustomerId') or
+                    prefs['streamerInfo'].get('customerId') or
+                    prefs['streamerInfo'].get('clientId')
+                )
+        
+        # If still not found, try to get from accounts endpoint as fallback
+        if not self.schwab_client_customer_id:
+            logger.warning("CustomerId not found in user preferences. Streamer connection may fail.")
+            logger.debug("Attempting to get customer ID from accounts endpoint...")
+            try:
+                from api.orders import SCHWAB_ACCOUNTS_URL
+                accounts_response = schwab_api_request("GET", SCHWAB_ACCOUNTS_URL, access_token)
+                accounts_data = accounts_response.json()
+                if accounts_data and len(accounts_data) > 0:
+                    # Try to extract customer ID from first account
+                    first_account = accounts_data[0]
+                    self.schwab_client_customer_id = (
+                        first_account.get('accountNumber') or
+                        first_account.get('hashValue') or
+                        str(first_account.get('accountId', ''))
+                    )
+                    if self.schwab_client_customer_id:
+                        logger.info(f"Retrieved CustomerId from accounts endpoint: {self.schwab_client_customer_id}")
+            except Exception as e:
+                logger.error(f"Failed to get CustomerId from accounts endpoint: {e}")
         
         self.schwab_client_correl_id = str(uuid.uuid4())
         self.schwab_client_channel = prefs.get('schwabClientChannel') or prefs.get('channel', 'IO')
         self.schwab_client_function_id = prefs.get('schwabClientFunctionId') or prefs.get('functionId', 'APIAPP')
-        logger.info(f"Streamer config: URL={self.ws_url}, CustomerId={self.schwab_client_customer_id}")
+        
+        if not self.schwab_client_customer_id:
+            logger.error("CRITICAL: CustomerId is None! Streamer connection will fail with 404 error.")
+            logger.error("Please check user preferences API response structure.")
+        else:
+            logger.info(f"Streamer config: URL={self.ws_url}, CustomerId={self.schwab_client_customer_id}")
     
     def _get_next_request_id(self) -> str:
         """Get next unique request ID."""
@@ -107,7 +150,10 @@ class SchwabStreamer:
             if not self.ws_url:
                 raise ValueError("WebSocket URL not found")
             
-            logger.info(f"Connecting to Schwab Streamer at {self.ws_url}")
+            if not self.schwab_client_customer_id:
+                raise ValueError("CustomerId is required for Streamer connection but was not found in user preferences. Please check your Schwab API account configuration.")
+            
+            logger.info(f"Connecting to Schwab Streamer at {self.ws_url} with CustomerId={self.schwab_client_customer_id}")
             self.ws = websocket.WebSocketApp(
                 self.ws_url,
                 on_open=self._on_open,

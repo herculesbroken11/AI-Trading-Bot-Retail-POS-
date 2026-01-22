@@ -409,7 +409,10 @@ def get_chart_data(symbol: str):
                             # Also adjust the original datetime column to match
                             if 'datetime' in fill_row.columns:
                                 # Convert ET datetime to UTC for the datetime column
-                                fill_row.loc[fill_row.index[0], 'datetime'] = adjusted_datetime_et.astimezone(pytz.UTC).replace(tzinfo=None)
+                                # Fix pandas FutureWarning by explicitly converting to compatible dtype
+                                utc_datetime = adjusted_datetime_et.astimezone(pytz.UTC).replace(tzinfo=None)
+                                # Convert to pandas Timestamp to ensure dtype compatibility
+                                fill_row.loc[fill_row.index[0], 'datetime'] = pd.Timestamp(utc_datetime)
                             df_complete.append(fill_row)
                             logger.debug(f"Filled {slot_time.strftime('%I:%M %p')} with previous day's data")
                         # If no previous day data either, skip this slot (shouldn't happen if we have enough historical data)
@@ -481,17 +484,34 @@ def get_chart_data(symbol: str):
         }
         
         # Format candles and indicators
-        # Important: Unix timestamps are always UTC-based, but represent the correct moment in time
-        # When we have an ET datetime, we convert it to UTC timestamp correctly
-        # The chart library will then display it in ET timezone based on timeZone setting
+        # CRITICAL: Lightweight Charts does NOT support timezone conversion natively
+        # We must manually adjust timestamps to ET timezone BEFORE sending to the chart
+        # The chart library processes all timestamps in UTC, so we need to convert ET times
+        # to appear as if they were UTC times (by subtracting the ET offset)
         for idx, row in df.iterrows():
             # Use datetime_et (ET timezone) for the timestamp
-            # Convert ET datetime to UTC timestamp (Unix timestamps are always UTC)
-            # The .timestamp() method correctly converts timezone-aware datetime to UTC timestamp
+            # Since Lightweight Charts doesn't support timezone, we need to adjust the timestamp
+            # to make ET times display correctly. We do this by converting ET to UTC timestamp,
+            # but then adjusting it back so the chart displays it as ET time
             if 'datetime_et' in row and pd.notna(row['datetime_et']):
-                # datetime_et is timezone-aware (ET), timestamp() converts to UTC Unix timestamp
-                # This is correct - Unix timestamps are always UTC, representing the moment in time
-                et_timestamp = int(row['datetime_et'].timestamp() * 1000)
+                # CRITICAL FIX: Lightweight Charts doesn't support timezone conversion natively
+                # We must manually adjust timestamps so ET times display correctly
+                # Solution: Create a timestamp that represents ET time as if it were UTC
+                # This way, when the chart displays it as UTC, it shows the ET time
+                et_dt = row['datetime_et']
+                # Get the ET offset (ET is UTC-5 or UTC-4 depending on DST)
+                utc_dt = et_dt.astimezone(pytz.UTC)
+                # Calculate offset: how many hours ahead UTC is compared to ET
+                et_offset_hours = (utc_dt.hour - et_dt.hour) % 24
+                if et_offset_hours > 12:
+                    et_offset_hours -= 24
+                # Create a naive datetime with ET time values (treat as UTC for display)
+                naive_dt_et_as_utc = datetime(
+                    et_dt.year, et_dt.month, et_dt.day,
+                    et_dt.hour, et_dt.minute, et_dt.second
+                )
+                # Convert to timestamp - this will display as ET time in the chart
+                et_timestamp = int(pd.Timestamp(naive_dt_et_as_utc).timestamp() * 1000)
             elif 'datetime' in row and pd.notna(row['datetime']):
                 # Fallback: if datetime is timezone-aware, use it directly
                 # If naive, assume it's UTC (from Schwab API)
@@ -517,16 +537,16 @@ def get_chart_data(symbol: str):
             }
             chart_data['candles'].append(candle)
             
-            # Add indicators
+            # Add indicators (use same adjusted timestamp for proper alignment)
             if 'sma_8' in row and pd.notna(row['sma_8']):
                 chart_data['indicators']['sma_8'].append({
-                    'time': candle['time'],
+                    'time': et_timestamp,
                     'value': float(row['sma_8'])
                 })
             
             if 'sma_20' in row and pd.notna(row['sma_20']):
                 chart_data['indicators']['sma_20'].append({
-                    'time': candle['time'],
+                    'time': et_timestamp,
                     'value': float(row['sma_20'])
                 })
             
@@ -535,14 +555,14 @@ def get_chart_data(symbol: str):
             if 'sma_200' in row:
                 if pd.notna(row['sma_200']):
                     chart_data['indicators']['sma_200'].append({
-                        'time': candle['time'],
+                        'time': et_timestamp,
                         'value': float(row['sma_200'])
                     })
                 # If MM200 is NaN, skip it (expected for first ~200 candles)
             
             if 'rsi_14' in row and pd.notna(row['rsi_14']):
                 chart_data['indicators']['rsi_14'].append({
-                    'time': candle['time'],
+                    'time': et_timestamp,
                     'value': float(row['rsi_14'])
                 })
         

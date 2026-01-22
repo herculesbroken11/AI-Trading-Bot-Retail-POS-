@@ -400,8 +400,9 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
             lockVisibleTimeRangeOnResize: false,
             rightBarStaysOnScroll: false,
             shiftVisibleRangeOnNewBar: false,
-            // CRITICAL: Display times in ET timezone - must be set here AND after chart creation
-            timeZone: 'America/New_York', // Use America/New_York for ET timezone
+            // NOTE: Lightweight Charts doesn't support timezone conversion natively
+            // Timestamps are manually adjusted in backend to display ET times correctly
+            // We don't set timeZone here since it doesn't work - timestamps are pre-adjusted
             visible: true,
           },
           width: containerWidth,

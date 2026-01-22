@@ -782,7 +782,7 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
           : new Date(data.candles[data.candles.length - 1].time)
         const daysDiff = (lastTime - firstTime) / (1000 * 60 * 60 * 24)
         console.log(`📥 Data spans ${daysDiff.toFixed(1)} days: ${firstTime.toLocaleDateString()} to ${lastTime.toLocaleDateString()}`)
-        console.log(`📥 View mode: ${viewModeParam}, should show all ${data.candles.length} candles when zoomed out`)
+        console.log(`📥 Should show all ${data.candles.length} candles when zoomed out`)
       } else {
         console.warn(`⚠️ No candles received in chart data!`)
       }

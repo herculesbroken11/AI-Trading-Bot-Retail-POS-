@@ -834,6 +834,129 @@ def stream_status():
     """Get streaming status."""
     return jsonify(streamer.get_status()), 200
 
+@streaming_bp.route('/diagnostics', methods=['GET'])
+def get_streamer_diagnostics():
+    """
+    Diagnostic endpoint to check WebSocket configuration.
+    Returns detailed information about WebSocket URL, CustomerId, and user preferences.
+    """
+    try:
+        tokens = load_tokens()
+        if not tokens or 'access_token' not in tokens:
+            return jsonify({
+                "error": "Not authenticated",
+                "message": "Please authenticate first using /auth/login"
+            }), 401
+        
+        access_token = get_valid_access_token()
+        if not access_token:
+            return jsonify({
+                "error": "No valid access token",
+                "message": "Please authenticate first using /auth/login"
+            }), 401
+        
+        # Get user preferences
+        try:
+            response = schwab_api_request("GET", SCHWAB_USER_PREF_URL, access_token)
+            prefs = response.json()
+        except Exception as e:
+            return jsonify({
+                "error": "Failed to get user preferences",
+                "details": str(e),
+                "endpoint": SCHWAB_USER_PREF_URL
+            }), 500
+        
+        # Extract WebSocket configuration
+        ws_url = None
+        customer_id = None
+        
+        # Try to find WebSocket URL
+        if 'streamerInfoUrl' in prefs:
+            ws_url = prefs['streamerInfoUrl']
+        elif 'streamerInfo' in prefs and isinstance(prefs['streamerInfo'], dict):
+            ws_url = prefs['streamerInfo'].get('url') or prefs['streamerInfo'].get('streamerInfoUrl')
+        else:
+            # Search nested structures
+            for key, value in prefs.items():
+                if isinstance(value, dict) and 'streamerInfoUrl' in value:
+                    ws_url = value['streamerInfoUrl']
+                    break
+        
+        if not ws_url:
+            ws_url = os.getenv("SCHWAB_WS_URL", "wss://streamer.schwab.com")
+        
+        # Try to find Customer ID
+        customer_id = (
+            prefs.get('schwabClientCustomerId') or 
+            prefs.get('customerId') or
+            prefs.get('clientId') or
+            prefs.get('accountNumber')
+        )
+        
+        if not customer_id and 'streamerInfo' in prefs:
+            if isinstance(prefs['streamerInfo'], dict):
+                customer_id = (
+                    prefs['streamerInfo'].get('schwabClientCustomerId') or
+                    prefs['streamerInfo'].get('customerId') or
+                    prefs['streamerInfo'].get('clientId')
+                )
+        
+        # Try accounts endpoint as fallback
+        if not customer_id:
+            try:
+                from api.orders import SCHWAB_ACCOUNTS_URL
+                accounts_response = schwab_api_request("GET", SCHWAB_ACCOUNTS_URL, access_token)
+                accounts_data = accounts_response.json()
+                
+                if isinstance(accounts_data, dict):
+                    accounts_data = [accounts_data]
+                
+                if accounts_data and len(accounts_data) > 0:
+                    first_account = accounts_data[0]
+                    sec_account = first_account.get("securitiesAccount", first_account)
+                    customer_id = (
+                        sec_account.get('accountNumber') or
+                        first_account.get('accountNumber') or
+                        str(sec_account.get('accountId', '')) or
+                        str(first_account.get('accountId', ''))
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to get CustomerId from accounts: {e}")
+        
+        # Extract other config
+        channel = prefs.get('schwabClientChannel') or prefs.get('channel', 'IO')
+        function_id = prefs.get('schwabClientFunctionId') or prefs.get('functionId', 'APIAPP')
+        
+        return jsonify({
+            "websocket_config": {
+                "url": ws_url,
+                "url_source": "user_preferences" if ws_url != os.getenv("SCHWAB_WS_URL", "wss://streamer.schwab.com") else "default_env",
+                "customer_id": customer_id,
+                "customer_id_source": "user_preferences" if customer_id else "accounts_endpoint_or_missing",
+                "channel": channel,
+                "function_id": function_id
+            },
+            "user_preferences_structure": {
+                "top_level_keys": list(prefs.keys()),
+                "has_streamerInfo": 'streamerInfo' in prefs,
+                "has_streamerInfoUrl": 'streamerInfoUrl' in prefs,
+                "full_structure": prefs  # Include full structure for debugging
+            },
+            "connection_status": streamer.get_status(),
+            "recommendations": {
+                "websocket_url_check": "Verify the WebSocket URL format matches Schwab's current requirements",
+                "customer_id_check": "Ensure CustomerId is present and correct (required for Streamer connection)",
+                "if_404_error": "The 404 error suggests the WebSocket URL or connection method may be incorrect"
+            }
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Diagnostics failed: {e}", exc_info=True)
+        return jsonify({
+            "error": "Diagnostics failed",
+            "details": str(e)
+        }), 500
+
 @streaming_bp.route('/chart/latest/<symbol>', methods=['GET'])
 def get_latest_chart_candle(symbol: str):
     """Get the latest real-time candle for a symbol."""

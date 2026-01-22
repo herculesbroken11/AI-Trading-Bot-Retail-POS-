@@ -36,6 +36,7 @@ def get_chart_data(symbol: str):
         JSON with candles, indicators, and metadata
     """
     try:
+        logger.info(f"Chart data request for {symbol}")
         # Get query parameters
         period_type = request.args.get('periodType', 'day')
         period_value = int(request.args.get('periodValue', 1))
@@ -534,8 +535,14 @@ def get_chart_data(symbol: str):
         return jsonify(chart_data), 200
         
     except Exception as e:
-        logger.error(f"Failed to get chart data for {symbol}: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"Failed to get chart data for {symbol}: {e}\n{error_trace}")
+        return jsonify({
+            "error": f"Failed to get chart data: {str(e)}",
+            "symbol": symbol,
+            "details": str(e)
+        }), 500
 
 @charts_bp.route('/watchlist', methods=['GET'])
 def get_watchlist():

@@ -177,7 +177,15 @@ class SchwabStreamer:
             )
             
             self._access_token = access_token
-            self.thread = threading.Thread(target=self.ws.run_forever)
+            # Use run_forever with ping_interval to keep connection alive
+            # Note: Some WebSocket libraries may need different connection methods
+            self.thread = threading.Thread(
+                target=self.ws.run_forever,
+                kwargs={
+                    'ping_interval': 20,  # Send ping every 20 seconds
+                    'ping_timeout': 10,   # Wait 10 seconds for pong
+                }
+            )
             self.thread.daemon = True
             self.thread.start()
             logger.info("Schwab Streamer WebSocket connection initiated")
@@ -748,7 +756,14 @@ class SchwabStreamer:
     
     def _on_error(self, ws, error):
         """Handle WebSocket error."""
-        logger.error(f"WebSocket error: {error}")
+        # Parse error to get more details
+        error_str = str(error)
+        if hasattr(error, 'status_code'):
+            error_str = f"Handshake status {error.status_code} {getattr(error, 'status_message', '')}"
+        elif isinstance(error, tuple) and len(error) >= 2:
+            error_str = f"Handshake status {error[0]} {error[1] if len(error) > 1 else ''}"
+        
+        logger.error(f"WebSocket error: {error_str} -+-+- {error}")
         self.is_connected = False
         self.is_authenticated = False
     

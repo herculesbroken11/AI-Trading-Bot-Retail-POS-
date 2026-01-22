@@ -25,6 +25,10 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
   const mm20SeriesRef = useRef(null)
   const mm200SeriesRef = useRef(null)
   const volumeSeriesRef = useRef(null)
+  
+  // Real-time streaming refs
+  const realtimePollIntervalRef = useRef(null)
+  const lastCandleTimeRef = useRef(null)
 
   useEffect(() => {
     // Load watchlist from automation status
@@ -47,6 +51,19 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
   useEffect(() => {
     if (selectedSymbol) {
       loadChartData()
+      // Subscribe to real-time chart data
+      subscribeToRealtimeChart(selectedSymbol)
+    }
+    
+    // Cleanup on unmount or symbol change
+    return () => {
+      if (realtimePollIntervalRef.current) {
+        clearInterval(realtimePollIntervalRef.current)
+        realtimePollIntervalRef.current = null
+      }
+      if (selectedSymbol) {
+        unsubscribeFromRealtimeChart(selectedSymbol)
+      }
     }
   }, [selectedSymbol, timeframe, lastUpdate])
 
@@ -577,6 +594,128 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
         return [1, 'month', 1]
       default:
         return [10, 'day', 1]  // Default to 10 days for enough data
+    }
+  }
+
+  // Real-time chart subscription functions
+  const subscribeToRealtimeChart = async (symbol) => {
+    if (!symbol) return
+    
+    try {
+      // First, ensure Streamer is connected
+      const connectResponse = await fetch(`${window.location.origin}/streaming/connect`, {
+        method: 'POST'
+      })
+      
+      if (!connectResponse.ok) {
+        console.warn('Failed to connect to Streamer, real-time updates may not work')
+        return
+      }
+      
+      // Wait a bit for connection to establish
+      await new Promise(resolve => setTimeout(resolve, 1000))
+      
+      // Subscribe to CHART_EQUITY for this symbol
+      const subscribeResponse = await fetch(`${window.location.origin}/streaming/subscribe/CHART_EQUITY/${symbol}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      })
+      
+      if (subscribeResponse.ok) {
+        console.log(`Subscribed to real-time chart data for ${symbol}`)
+        
+        // Start polling for latest candle data
+        startRealtimePolling(symbol)
+      } else {
+        console.warn(`Failed to subscribe to real-time chart data for ${symbol}`)
+      }
+    } catch (error) {
+      console.error('Error subscribing to real-time chart:', error)
+    }
+  }
+
+  const unsubscribeFromRealtimeChart = async (symbol) => {
+    if (!symbol) return
+    
+    try {
+      await fetch(`${window.location.origin}/streaming/unsubscribe/CHART_EQUITY/${symbol}`, {
+        method: 'POST'
+      })
+      
+      if (realtimePollIntervalRef.current) {
+        clearInterval(realtimePollIntervalRef.current)
+        realtimePollIntervalRef.current = null
+      }
+      
+      console.log(`Unsubscribed from real-time chart data for ${symbol}`)
+    } catch (error) {
+      console.error('Error unsubscribing from real-time chart:', error)
+    }
+  }
+
+  const startRealtimePolling = (symbol) => {
+    // Clear any existing interval
+    if (realtimePollIntervalRef.current) {
+      clearInterval(realtimePollIntervalRef.current)
+    }
+    
+    // Poll every 1 second for latest candle
+    realtimePollIntervalRef.current = setInterval(async () => {
+      try {
+        const response = await fetch(`${window.location.origin}/streaming/chart/latest/${symbol}`)
+        if (response.ok) {
+          const data = await response.json()
+          if (data.has_data && data.candle) {
+            const candle = data.candle
+            
+            // Check if this is a new candle (different timestamp)
+            if (lastCandleTimeRef.current !== candle.timestamp) {
+              lastCandleTimeRef.current = candle.timestamp
+              
+              // Update chart with new candle
+              updateRealtimeCandle(candle)
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error polling for real-time candle:', error)
+      }
+    }, 1000) // Poll every 1 second
+  }
+
+  const updateRealtimeCandle = (candle) => {
+    if (!candlestickSeriesRef.current || !candle.time) return
+    
+    try {
+      // Convert timestamp to seconds (TradingView expects seconds)
+      const timeInSeconds = Math.floor(candle.time / 1000)
+      
+      // Update or append the candle
+      const candleData = {
+        time: timeInSeconds,
+        open: parseFloat(candle.open),
+        high: parseFloat(candle.high),
+        low: parseFloat(candle.low),
+        close: parseFloat(candle.close),
+      }
+      
+      // Use update() for real-time updates (updates the last candle or appends new one)
+      candlestickSeriesRef.current.update(candleData)
+      
+      // Update volume if available
+      if (volumeSeriesRef.current && candle.volume !== undefined) {
+        const volumeData = {
+          time: timeInSeconds,
+          value: parseFloat(candle.volume),
+          color: candle.close >= candle.open ? '#10b981' : '#ef4444',
+        }
+        volumeSeriesRef.current.update(volumeData)
+      }
+      
+      console.log('Real-time candle updated:', candleData)
+    } catch (error) {
+      console.error('Error updating real-time candle:', error)
     }
   }
 

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 from pathlib import Path
 from utils.logger import setup_logger
-from utils.helpers import load_tokens, schwab_api_request, save_tokens, polygon_api_request
+from utils.helpers import load_tokens, schwab_api_request, save_tokens
 from core.ov_engine import OVStrategyEngine
 
 quotes_bp = Blueprint('quotes', __name__, url_prefix='/quotes')
@@ -153,7 +153,7 @@ def get_quote_single(symbol_id: str):
 @quotes_bp.route('/historical/<symbol>', methods=['GET'])
 def get_historical(symbol: str):
     """
-    Get historical price data for a symbol using Polygon.io.
+    Get historical price data for a symbol using Schwab API.
     
     Query params:
         periodType: day, month, year, ytd
@@ -167,40 +167,24 @@ def get_historical(symbol: str):
     frequency_type = request.args.get('frequencyType', 'minute')
     frequency = int(request.args.get('frequency', '1'))  # Default to 1 minute
     
+    tokens = load_tokens()
+    if not tokens or 'access_token' not in tokens:
+        return jsonify({"error": "Not authenticated"}), 401
+    
     try:
-        # Calculate date range for Polygon.io API
-        # Polygon.io requires from_date and to_date in YYYY-MM-DD format
-        import pytz
-        et = pytz.timezone('US/Eastern')
-        now_et = datetime.now(et)
+        # Build Schwab API request parameters
+        params = {
+            "symbol": symbol.upper(),
+            "periodType": period_type,
+            "period": period,
+            "frequencyType": frequency_type,
+            "frequency": frequency
+        }
         
-        # Calculate end date (today)
-        to_date = now_et.date()
-        
-        # Calculate start date based on period_value and period_type
-        if period_type == 'day':
-            from_date = to_date - timedelta(days=period - 1)  # -1 because we include today
-        elif period_type == 'week':
-            from_date = to_date - timedelta(weeks=period - 1)
-        elif period_type == 'month':
-            from_date = to_date - timedelta(days=30 * (period - 1))
-        elif period_type == 'year':
-            from_date = to_date - timedelta(days=365 * (period - 1))
-        else:
-            from_date = to_date - timedelta(days=period - 1)
-        
-        # Map frequency_type to Polygon timespan
-        timespan = 'minute' if frequency_type == 'minute' else 'day'
-        
-        # Request historical data from Polygon.io
-        logger.info(f"Fetching data from Polygon.io for {symbol}: {from_date} to {to_date}, frequency: {frequency}min")
-        data = polygon_api_request(
-            symbol=symbol.upper(),
-            multiplier=frequency,
-            timespan=timespan,
-            from_date=from_date.strftime('%Y-%m-%d'),
-            to_date=to_date.strftime('%Y-%m-%d')
-        )
+        # Request historical data from Schwab API
+        logger.info(f"Fetching data from Schwab API for {symbol}: periodType={period_type}, period={period}, frequencyType={frequency_type}, frequency={frequency}")
+        response = schwab_api_request("GET", SCHWAB_HISTORICAL_URL, tokens['access_token'], params=params)
+        data = response.json()
         
         # Convert to DataFrame if candles are present
         if 'candles' in data:
@@ -309,14 +293,14 @@ def get_historical(symbol: str):
 def analyze_symbol(symbol: str):
     """
     Get quote, historical data, and strategy analysis for a symbol.
-    Historical data uses Polygon.io, quotes use Schwab API.
+    Historical data and quotes use Schwab API.
     """
     tokens = load_tokens()
     if not tokens or 'access_token' not in tokens:
         return jsonify({"error": "Not authenticated"}), 401
     
     try:
-        # Get historical data from Polygon.io
+        # Get historical data from Schwab API
         import pytz
         et = pytz.timezone('US/Eastern')
         now_et = datetime.now(et)
@@ -326,26 +310,30 @@ def analyze_symbol(symbol: str):
         # Try frequency=1 first, fallback to frequency=5 if needed
         frequency = 1
         try:
-            logger.info(f"Fetching data from Polygon.io for {symbol}: {from_date} to {to_date}, frequency: {frequency}min")
-            data = polygon_api_request(
-                symbol=symbol.upper(),
-                multiplier=frequency,
-                timespan='minute',
-                from_date=from_date.strftime('%Y-%m-%d'),
-                to_date=to_date.strftime('%Y-%m-%d')
-            )
+            params = {
+                "symbol": symbol.upper(),
+                "periodType": "day",
+                "period": 10,  # Request 10 days for analysis
+                "frequencyType": "minute",
+                "frequency": frequency
+            }
+            logger.info(f"Fetching data from Schwab API for {symbol}: frequency={frequency}min")
+            response = schwab_api_request("GET", SCHWAB_HISTORICAL_URL, tokens['access_token'], params=params)
+            data = response.json()
         except Exception as e:
             # If frequency=1 fails, try frequency=5
             logger.warning(f"Frequency=1 failed, trying frequency=5: {e}")
             frequency = 5
             try:
-                data = polygon_api_request(
-                    symbol=symbol.upper(),
-                    multiplier=frequency,
-                    timespan='minute',
-                    from_date=from_date.strftime('%Y-%m-%d'),
-                    to_date=to_date.strftime('%Y-%m-%d')
-                )
+                params = {
+                    "symbol": symbol.upper(),
+                    "periodType": "day",
+                    "period": 10,
+                    "frequencyType": "minute",
+                    "frequency": frequency
+                }
+                response = schwab_api_request("GET", SCHWAB_HISTORICAL_URL, tokens['access_token'], params=params)
+                data = response.json()
             except Exception as e2:
                 logger.error(f"Historical data request failed with both frequencies: {e2}")
                 return jsonify({
@@ -375,14 +363,15 @@ def analyze_symbol(symbol: str):
             # This can happen if market is closed or it's before market open
             logger.info(f"Trying to get data for previous day for {symbol}")
             try:
-                from_date_prev = to_date - timedelta(days=1)
-                data_prev = polygon_api_request(
-                    symbol=symbol.upper(),
-                    multiplier=5,
-                    timespan='minute',
-                    from_date=from_date_prev.strftime('%Y-%m-%d'),
-                    to_date=from_date_prev.strftime('%Y-%m-%d')
-                )
+                params_prev = {
+                    "symbol": symbol.upper(),
+                    "periodType": "day",
+                    "period": 1,
+                    "frequencyType": "minute",
+                    "frequency": 5
+                }
+                response_prev = schwab_api_request("GET", SCHWAB_HISTORICAL_URL, tokens['access_token'], params=params_prev)
+                data_prev = response_prev.json()
                 candles_prev = data_prev.get('candles', [])
                 
                 if candles_prev and len(candles_prev) > 0:
@@ -603,7 +592,7 @@ def analyze_symbol(symbol: str):
             "warning": "Insufficient data for full analysis" if len(df) < 200 else None
         }), 200
     except Exception as e:
-        # Note: Historical data uses Polygon (no auth needed), but quotes use Schwab (auth required)
+        # Note: Both historical data and quotes use Schwab API (auth required)
         # If 401 error, it's likely from the quote endpoint, try to refresh token
         if "401" in str(e) or "Unauthorized" in str(e):
             logger.warning("401 error detected, attempting token refresh...")

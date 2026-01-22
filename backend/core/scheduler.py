@@ -13,7 +13,7 @@ from core.position_manager import PositionManager
 from core.performance_analyzer import PerformanceAnalyzer
 from ai.analyze import TradingAIAnalyzer
 from api.orders import execute_signal_helper
-from utils.helpers import get_valid_access_token, schwab_api_request, polygon_api_request
+from utils.helpers import get_valid_access_token, schwab_api_request
 from api.quotes import SCHWAB_QUOTES_URL
 from api.activity import add_activity_log
 
@@ -113,24 +113,23 @@ class TradingScheduler:
             try:
                 add_activity_log('info', f'Analyzing {symbol}...', None, symbol)
                 
-                # Get historical data using Polygon.io
+                # Get historical data using Schwab API
                 import pytz
                 import pandas as pd
-                et = pytz.timezone('US/Eastern')
-                now_et = datetime.now(et)
-                to_date = now_et.date()
-                from_date = to_date - timedelta(days=0)  # Today's data
+                from api.quotes import SCHWAB_HISTORICAL_URL
                 
                 try:
-                    historical_data = polygon_api_request(
-                        symbol=symbol.upper(),
-                        multiplier=5,  # 5-minute bars
-                        timespan='minute',
-                        from_date=from_date.strftime('%Y-%m-%d'),
-                        to_date=to_date.strftime('%Y-%m-%d')
-                    )
+                    params = {
+                        "symbol": symbol.upper(),
+                        "periodType": "day",
+                        "period": 1,
+                        "frequencyType": "minute",
+                        "frequency": 5
+                    }
+                    response = schwab_api_request("GET", SCHWAB_HISTORICAL_URL, access_token, params=params)
+                    historical_data = response.json()
                 except Exception as e:
-                    logger.error(f"Failed to fetch data from Polygon.io for {symbol}: {e}")
+                    logger.error(f"Failed to fetch data from Schwab API for {symbol}: {e}")
                     add_activity_log('error', f'{symbol}: Failed to fetch market data - {str(e)}', None, symbol)
                     continue
                 
@@ -145,7 +144,7 @@ class TradingScheduler:
                     add_activity_log('warning', f'{symbol}: Empty market data', None, symbol)
                     continue
                 
-                # Convert to DataFrame - Polygon returns dict format
+                # Convert to DataFrame - Schwab returns array format
                 df = pd.DataFrame(candles)
                 if 'datetime' in df.columns:
                     df['datetime'] = pd.to_datetime(df['datetime'], unit='ms')
@@ -480,30 +479,35 @@ class TradingScheduler:
                 logger.warning("Not authenticated - skipping parameter optimization")
                 return
             
-            # Get prices for watchlist symbols using Polygon.io
-            import pytz
-            et = pytz.timezone('US/Eastern')
-            now_et = datetime.now(et)
-            to_date = now_et.date()
-            from_date = to_date - timedelta(days=0)  # Today's data
+            # Get prices for watchlist symbols using Schwab API
+            from api.quotes import SCHWAB_HISTORICAL_URL
             
             recent_prices = []
             for symbol in self.watchlist[:5]:  # Use first 5 symbols
                 try:
-                    data = polygon_api_request(
-                        symbol=symbol.upper(),
-                        multiplier=5,  # 5-minute bars
-                        timespan='minute',
-                        from_date=from_date.strftime('%Y-%m-%d'),
-                        to_date=to_date.strftime('%Y-%m-%d')
-                    )
+                    params = {
+                        "symbol": symbol.upper(),
+                        "periodType": "day",
+                        "period": 1,
+                        "frequencyType": "minute",
+                        "frequency": 5
+                    }
+                    response = schwab_api_request("GET", SCHWAB_HISTORICAL_URL, access_token, params=params)
+                    data = response.json()
                     
                     # Extract close prices
                     if isinstance(data, dict) and 'candles' in data:
-                        prices = [c.get('close', 0) for c in data['candles'] if c.get('close')]
-                        recent_prices.extend(prices)
+                        # Handle both array and dict formats
+                        candles = data['candles']
+                        if candles and len(candles) > 0:
+                            if isinstance(candles[0], dict):
+                                prices = [c.get('close', 0) for c in candles if c.get('close')]
+                            else:
+                                # Array format: [datetime, open, high, low, close, volume]
+                                prices = [c[4] if len(c) > 4 else 0 for c in candles if isinstance(c, (list, tuple)) and len(c) > 4]
+                            recent_prices.extend(prices)
                 except Exception as e:
-                    logger.debug(f"Failed to get prices for {symbol}: {e}")
+                    logger.debug(f"Failed to get prices for {symbol} from Schwab API: {e}")
                     continue
             
             if recent_prices:

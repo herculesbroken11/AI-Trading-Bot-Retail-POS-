@@ -110,33 +110,42 @@ def optimize_parameters():
         if not watchlist:
             return jsonify({"error": "TRADING_WATCHLIST is empty. Please set it in .env file."}), 400
         
-        # Get recent prices for volatility calculation
-        from utils.helpers import polygon_api_request
-        import pytz
-        from datetime import datetime, timedelta
+        # Get recent prices for volatility calculation using Schwab API
+        from utils.helpers import load_tokens, schwab_api_request, get_valid_access_token
+        from api.quotes import SCHWAB_HISTORICAL_URL
         
-        # Get prices using Polygon.io
-        et = pytz.timezone('US/Eastern')
-        now_et = datetime.now(et)
-        to_date = now_et.date()
-        from_date = to_date - timedelta(days=0)  # Today's data
+        tokens = load_tokens()
+        if not tokens or 'access_token' not in tokens:
+            return jsonify({"error": "Not authenticated"}), 401
+        
+        access_token = get_valid_access_token()
+        if not access_token:
+            return jsonify({"error": "No valid access token available"}), 401
         
         recent_prices = []
         for symbol in watchlist[:5]:  # Use first 5 symbols
             try:
-                data = polygon_api_request(
-                    symbol=symbol.upper(),
-                    multiplier=5,  # 5-minute bars
-                    timespan='minute',
-                    from_date=from_date.strftime('%Y-%m-%d'),
-                    to_date=to_date.strftime('%Y-%m-%d')
-                )
+                params = {
+                    "symbol": symbol.upper(),
+                    "periodType": "day",
+                    "period": 1,
+                    "frequencyType": "minute",
+                    "frequency": 5
+                }
+                response = schwab_api_request("GET", SCHWAB_HISTORICAL_URL, access_token, params=params)
+                data = response.json()
                 
                 if isinstance(data, dict) and 'candles' in data:
-                    prices = [c.get('close', 0) for c in data['candles'] if c.get('close')]
-                    recent_prices.extend(prices)
+                    candles = data['candles']
+                    if candles and len(candles) > 0:
+                        if isinstance(candles[0], dict):
+                            prices = [c.get('close', 0) for c in candles if c.get('close')]
+                        else:
+                            # Array format: [datetime, open, high, low, close, volume]
+                            prices = [c[4] if len(c) > 4 else 0 for c in candles if isinstance(c, (list, tuple)) and len(c) > 4]
+                        recent_prices.extend(prices)
             except Exception as e:
-                logger.debug(f"Failed to get prices for {symbol}: {e}")
+                logger.debug(f"Failed to get prices for {symbol} from Schwab API: {e}")
                 continue
         
         if not recent_prices:

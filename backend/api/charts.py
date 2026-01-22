@@ -6,11 +6,16 @@ from flask import Blueprint, request, jsonify
 from datetime import datetime, timedelta, date
 import pandas as pd
 from utils.logger import setup_logger
-from utils.helpers import polygon_api_request
+from utils.helpers import load_tokens, schwab_api_request, get_valid_access_token
 from core.ov_engine import OVStrategyEngine
 
 charts_bp = Blueprint('charts', __name__, url_prefix='/charts')
 logger = setup_logger("charts")
+
+# Schwab API endpoints
+SCHWAB_BASE_URL = "https://api.schwabapi.com"
+SCHWAB_MARKETDATA_BASE = f"{SCHWAB_BASE_URL}/marketdata/v1"
+SCHWAB_HISTORICAL_URL = f"{SCHWAB_MARKETDATA_BASE}/pricehistory"
 
 # Initialize OV engine for indicator calculation
 ov_engine = OVStrategyEngine()
@@ -52,7 +57,7 @@ def get_chart_data(symbol: str):
                 period_value = min(period_value, 10)
         
         # Validate frequency for minute type
-        # Polygon.io accepts various frequencies, but we'll use standard ones
+        # Schwab API accepts various frequencies, but we'll use standard ones
         if frequency_type == 'minute' and frequency not in [1, 5, 15, 30, 60]:
             # Map invalid frequencies to closest valid one
             if frequency == 2:
@@ -69,8 +74,7 @@ def get_chart_data(symbol: str):
                 frequency = 60
             logger.warning(f"Invalid frequency {request.args.get('frequency')} for minute type, using {frequency} instead")
         
-        # Calculate date range for Polygon.io API
-        # Polygon.io requires from_date and to_date in YYYY-MM-DD format
+        # Calculate date range for Schwab API
         import pytz
         et = pytz.timezone('US/Eastern')
         now_et = datetime.now(et)
@@ -88,26 +92,43 @@ def get_chart_data(symbol: str):
         else:
             from_date = to_date - timedelta(days=period_value - 1)
         
-        # Request historical data from Polygon.io
-        logger.info(f"Fetching data from Polygon.io for {symbol}: {from_date} to {to_date}, frequency: {frequency}min")
-        data = polygon_api_request(
-            symbol=symbol.upper(),
-            multiplier=frequency,
-            timespan='minute' if frequency_type == 'minute' else 'day',
-            from_date=from_date.strftime('%Y-%m-%d'),
-            to_date=to_date.strftime('%Y-%m-%d')
-        )
+        # Request historical data from Schwab API
+        tokens = load_tokens()
+        if not tokens or 'access_token' not in tokens:
+            return jsonify({"error": "Not authenticated"}), 401
+        
+        access_token = get_valid_access_token()
+        if not access_token:
+            return jsonify({"error": "No valid access token available"}), 401
+        
+        # Build Schwab API request parameters
+        params = {
+            "symbol": symbol.upper(),
+            "periodType": period_type,
+            "period": period_value,
+            "frequencyType": frequency_type,
+            "frequency": frequency
+        }
+        
+        logger.info(f"Fetching data from Schwab API for {symbol}: periodType={period_type}, period={period_value}, frequencyType={frequency_type}, frequency={frequency}")
+        
+        try:
+            response = schwab_api_request("GET", SCHWAB_HISTORICAL_URL, access_token, params=params)
+            data = response.json()
+        except Exception as e:
+            logger.error(f"Failed to fetch data from Schwab API for {symbol}: {e}")
+            return jsonify({"error": f"Failed to fetch data from Schwab API: {str(e)}"}), 500
         
         if not data or 'candles' not in data:
-            logger.error(f"No data returned from Polygon.io API for {symbol}")
+            logger.error(f"No data returned from Schwab API for {symbol}")
             return jsonify({"error": "No data available from market data provider"}), 404
         
         candles = data['candles']
         if not candles or len(candles) == 0:
-            logger.error(f"Empty candles array returned from Polygon.io API for {symbol}")
+            logger.error(f"Empty candles array returned from Schwab API for {symbol}")
             return jsonify({"error": "Empty data returned from market data provider"}), 404
         
-        logger.info(f"Received {len(candles)} candles from Polygon.io API for {symbol}")
+        logger.info(f"Received {len(candles)} candles from Schwab API for {symbol}")
         
         # Convert to DataFrame
         df = pd.DataFrame(candles)

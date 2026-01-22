@@ -1,5 +1,5 @@
 """
-Enhanced Chart Renderer for Polygon.io Market Data
+Enhanced Chart Renderer for Market Data
 Generates charts with EMA 20, EMA 200, VWAP, and volume.
 Stores charts with deterministic filenames: SYMBOL_TIMEFRAME_YYYYMMDD_HHMM.png
 """

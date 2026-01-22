@@ -95,8 +95,19 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
       sma_8_count: indicators.sma_8?.length || 0,
       sma_20_count: indicators.sma_20?.length || 0,
       sma_200_count: indicators.sma_200?.length || 0,
-      timeframe: timeframe
+      timeframe: timeframe,
+      viewMode: viewMode
     })
+    
+    // Log first and last candle timestamps to verify date range
+    if (candles.length > 0) {
+      const firstCandle = candles[0]
+      const lastCandle = candles[candles.length - 1]
+      const firstTime = typeof firstCandle.time === 'number' ? new Date(firstCandle.time) : new Date(firstCandle.time)
+      const lastTime = typeof lastCandle.time === 'number' ? new Date(lastCandle.time) : new Date(lastCandle.time)
+      console.log(`📊 Chart data range: ${firstTime.toLocaleDateString()} ${firstTime.toLocaleTimeString()} to ${lastTime.toLocaleDateString()} ${lastTime.toLocaleTimeString()}`)
+      console.log(`📊 Total candles: ${candles.length} (should show ${Math.ceil(candles.length / (510 / (timeframe === '1min' ? 1 : timeframe === '5min' ? 5 : timeframe === '15min' ? 15 : 1)))} days when zoomed out)`)
+    }
 
     // Prepare candlestick data
     const candlestickData = candles.map(c => {
@@ -152,7 +163,18 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
     // Update candlestick series
     if (candlestickSeriesRef.current) {
       candlestickSeriesRef.current.setData(candlestickData)
-      console.log('Candlestick data set:', candlestickData.length, 'candles')
+      console.log(`✅ Candlestick data set: ${candlestickData.length} candles`)
+      
+      // Log date range of loaded data
+      if (candlestickData.length > 0) {
+        const firstCandle = candlestickData[0]
+        const lastCandle = candlestickData[candlestickData.length - 1]
+        const firstDate = new Date(firstCandle.time * 1000)
+        const lastDate = new Date(lastCandle.time * 1000)
+        const daysDiff = (lastDate - firstDate) / (1000 * 60 * 60 * 24)
+        console.log(`📊 Chart loaded ${daysDiff.toFixed(1)} days of data: ${firstDate.toLocaleDateString()} to ${lastDate.toLocaleDateString()}`)
+        console.log(`📊 All ${candlestickData.length} candles are loaded - zoom out to see all historical data`)
+      }
     } else {
       console.error('Candlestick series not available')
     }
@@ -311,8 +333,18 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
         const currentOptions = timeScale.options()
         console.log('Chart timezone after update:', currentOptions.timeZone)
         
+        // Fit content to show all data - this allows zooming out to see all historical data
         timeScale.fitContent()
-        console.log('Chart content fitted with ET timezone')
+        console.log('Chart content fitted - all data should be visible when zoomed out')
+        
+        // Log visible range after fitting to verify all data is shown
+        const visibleRange = timeScale.getVisibleRange()
+        if (visibleRange) {
+          const fromDate = new Date(visibleRange.from * 1000)
+          const toDate = new Date(visibleRange.to * 1000)
+          const daysDiff = (toDate - fromDate) / (1000 * 60 * 60 * 24)
+          console.log(`Chart visible range after fitContent: ${fromDate.toLocaleDateString()} to ${toDate.toLocaleDateString()} (${daysDiff.toFixed(1)} days)`)
+        }
       } catch (e) {
         console.error('Error applying timezone after data update:', e)
         // Try fallback
@@ -719,19 +751,15 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
       // Parse timeframe
       const [periodValue, periodType, frequency] = parseTimeframe(timeframe)
       
-      // For multi-day view, use 'lastWeek' view mode to show all days without time filtering
-      // This allows the chart to display multiple days continuously when zoomed out
-      const viewModeParam = viewMode === 'today' ? 'lastWeek' : viewMode
+      // Always request all historical data (no view mode filtering)
+      // This allows the chart to show all days when zoomed out
       const urlParams = new URLSearchParams({
         periodType,
         periodValue: periodValue.toString(),
         frequencyType: 'minute',
-        frequency: frequency.toString(),
-        viewMode: viewModeParam
+        frequency: frequency.toString()
+        // No viewMode parameter - backend will return all days with 8 AM - 4:30 PM filtering per day
       })
-      if (customDate) {
-        urlParams.set('customDate', customDate)
-      }
       
       const response = await fetch(
         `${window.location.origin}/charts/data/${selectedSymbol}?${urlParams.toString()}`
@@ -742,6 +770,23 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
       }
       
       const data = await response.json()
+      
+      // Log data received for debugging multi-day view
+      console.log(`📥 Received chart data: ${data.candles?.length || 0} candles`)
+      if (data.candles && data.candles.length > 0) {
+        const firstTime = typeof data.candles[0].time === 'number' 
+          ? new Date(data.candles[0].time) 
+          : new Date(data.candles[0].time)
+        const lastTime = typeof data.candles[data.candles.length - 1].time === 'number'
+          ? new Date(data.candles[data.candles.length - 1].time)
+          : new Date(data.candles[data.candles.length - 1].time)
+        const daysDiff = (lastTime - firstTime) / (1000 * 60 * 60 * 24)
+        console.log(`📥 Data spans ${daysDiff.toFixed(1)} days: ${firstTime.toLocaleDateString()} to ${lastTime.toLocaleDateString()}`)
+        console.log(`📥 View mode: ${viewModeParam}, should show all ${data.candles.length} candles when zoomed out`)
+      } else {
+        console.warn(`⚠️ No candles received in chart data!`)
+      }
+      
       setChartData(data)
     } catch (err) {
       console.error('Failed to load chart data:', err)

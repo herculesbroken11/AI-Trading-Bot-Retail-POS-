@@ -41,13 +41,15 @@ def get_chart_data(symbol: str):
         period_value = int(request.args.get('periodValue', 1))
         frequency_type = request.args.get('frequencyType', 'minute')
         frequency = int(request.args.get('frequency', 1))
-        view_mode = request.args.get('viewMode', 'today')  # 'today', 'yesterday', 'lastWeek', 'lastMonth', 'custom'
-        custom_date = request.args.get('customDate', None)  # YYYY-MM-DD format
+        # View mode removed - always return all days with 8 AM - 4:30 PM filtering per day
+        # view_mode = request.args.get('viewMode', 'today')  # No longer used
+        # custom_date = request.args.get('customDate', None)  # No longer used
         
         # For MM200 calculation, we need at least 200 data points
         # After filtering to 8 AM - 4:30 PM ET, we get ~8.5 hours = ~510 minutes per day
         # For shorter timeframes, we need more days to ensure MM200 has enough data
-        # Calculate minimum days needed: 200 candles / (500 minutes per day / frequency)
+        # Calculate minimum days needed: 200 candles / (510 minutes per day / frequency)
+        # BUT: For multi-day views (lastWeek/lastMonth), don't cap - return all requested data
         if frequency_type == 'minute' and frequency > 0:
             minutes_per_day = 510  # 8 AM - 4:30 PM = ~8.5 hours = 510 minutes
             candles_per_day = minutes_per_day / frequency
@@ -55,8 +57,9 @@ def get_chart_data(symbol: str):
             if period_value < min_days_needed:
                 logger.info(f"Increasing period_value from {period_value} to {min_days_needed} to ensure MM200 has enough data (frequency: {frequency}min)")
                 period_value = min_days_needed
-                # Cap at 10 days to avoid too much data
-                period_value = min(period_value, 10)
+                # Cap at 20 days to ensure enough historical data for zoom out
+                period_value = min(period_value, 20)
+            logger.info(f"Requesting {period_value} days of data for historical chart display (allows zoom out)")
         
         # Validate frequency for minute type
         # Schwab API accepts various frequencies, but we'll use standard ones
@@ -222,135 +225,46 @@ def get_chart_data(symbol: str):
         logger.info(f"Today's data: {len(df_today)} candles")
         logger.info(f"Yesterday's data: {len(df_yesterday)} candles")
         
-        # Handle different view modes for historical data
-        current_time_only = now_et.time()
+        # SIMPLIFIED: Always return all days with 8 AM - 4:30 PM filtering per day
+        # This allows zooming out to see historical data across multiple days
+        # No view mode filtering - just return all days in the requested period
         
-        # Determine target date and end time based on view mode
-        if view_mode == 'yesterday':
-            # Show yesterday's complete session (8 AM - 4:30 PM)
-            target_date = yesterday_date
-            session_end_time = time_end  # 4:30 PM
-            date_label = "yesterday (complete session)"
-            logger.info(f"View mode: yesterday - showing {date_label} (8:00 AM - 4:30 PM)")
-        elif view_mode == 'lastWeek':
-            # Show last 5 days - don't filter to 8 AM - 4:30 PM, show all data
-            target_date = None  # Will show all dates in range
-            session_end_time = None  # Will show all times
-            date_label = "last 5 days (all data)"
-            logger.info(f"View mode: lastWeek - showing {date_label}")
-        elif view_mode == 'lastMonth':
-            # Show last 20 days - don't filter to 8 AM - 4:30 PM, show all data
-            target_date = None  # Will show all dates in range
-            session_end_time = None  # Will show all times
-            date_label = "last 20 days (all data)"
-            logger.info(f"View mode: lastMonth - showing {date_label}")
-        elif view_mode == 'custom' and custom_date:
-            # Show specific date's complete session (8 AM - 4:30 PM)
-            try:
-                target_date = datetime.strptime(custom_date, '%Y-%m-%d').date()
-                session_end_time = time_end  # 4:30 PM
-                date_label = f"{custom_date} (complete session)"
-                logger.info(f"View mode: custom date {custom_date} - showing {date_label} (8:00 AM - 4:30 PM)")
-            except ValueError:
-                logger.warning(f"Invalid custom date format: {custom_date}, defaulting to today")
-                view_mode = 'today'  # Fallback to today
-        else:
-            # Default: today (real-time view)
-            if current_hour < 8:
-                # Before 8 AM: Show yesterday's complete session (8 AM - 4:30 PM)
-                target_date = yesterday_date
-                session_end_time = time_end  # 4:30 PM
-                date_label = "yesterday (complete session)"
-                logger.info(f"Before 8 AM ET - showing {date_label} (8:00 AM - 4:30 PM)")
-            elif current_time_only <= time_end:
-                # Between 8 AM and 4:30 PM: Show today's data up to current time
-                target_date = current_date
-                session_end_time = current_time_only  # Current time
-                date_label = f"today (8:00 AM - {current_time_only.strftime('%I:%M %p')})"
-                logger.info(f"During trading hours - showing {date_label}")
-            else:
-                # After 4:30 PM: Show today's complete session (8 AM - 4:30 PM)
-                target_date = current_date
-                session_end_time = time_end  # 4:30 PM
-                date_label = "today (complete session)"
-                logger.info(f"After 4:30 PM ET - showing {date_label} (8:00 AM - 4:30 PM)")
+        # Filter each day to 8 AM - 4:30 PM ET, but include ALL days in the period
+        logger.info(f"Processing all days: Filtering each day to 8:00 AM - 4:30 PM ET, returning all {period_value} days")
+        logger.info(f"Total candles fetched from API: {len(df)}")
         
-        # Check if target_date has data
-        # IMPORTANT: We should only use fallback for market holidays (when target_date is a non-trading day)
-        # If it's after 4:30 PM on a trading day, we should show today's session even if there's no data yet
-        # (we'll fill gaps with previous day's data)
-        df_target_check = df[
-            (df['datetime_et'].dt.date == target_date) &
-            (df['datetime_et'].dt.time >= time_start) &
-            (df['datetime_et'].dt.time <= session_end_time)
-        ]
-        
-        # Only use fallback if:
-        # 1. No data for target_date AND
-        # 2. We're trying to show a full session (not during trading hours) AND
-        # 3. The target_date is not today (meaning it's likely a market holiday)
-        use_fallback = (len(df_target_check) == 0 and 
-                        session_end_time == time_end and 
-                        target_date != current_date)
-        
-        if use_fallback:
-            # No data for target date - likely a market holiday
-            logger.warning(f"No data for {date_label} ({target_date}). Searching for most recent available trading day...")
+        if len(df) > 0:
+            unique_dates = sorted(df['datetime_et'].dt.date.unique())
+            logger.info(f"Unique dates in fetched data: {unique_dates} (total: {len(unique_dates)} days)")
             
-            # Get unique dates from the full dataset, sorted descending
-            if len(df) > 0:
-                unique_dates = sorted(df['datetime_et'].dt.date.unique(), reverse=True)
-                logger.info(f"Available dates in dataset: {unique_dates}")
-                
-                # Try to find the most recent date with data between 8 AM - 4:30 PM
-                fallback_found = False
-                for available_date in unique_dates:
-                    date_start = et.localize(datetime.combine(available_date, datetime.min.time().replace(hour=8, minute=0)))
-                    date_end = et.localize(datetime.combine(available_date, datetime.min.time().replace(hour=16, minute=30)))
-                    
-                    df_fallback_check = df[
-                        (df['datetime_et'] >= date_start) &
-                        (df['datetime_et'] <= date_end)
-                    ]
-                    
-                    logger.info(f"Checking date {available_date}: {len(df_fallback_check)} candles between 8 AM - 4:30 PM")
-                    
-                    if len(df_fallback_check) > 0:
-                        logger.info(f"✓ Using fallback date: {available_date} with {len(df_fallback_check)} candles")
-                        target_date = available_date
-                        session_end_time = time_end  # Always show full session (8 AM - 4:30 PM) for fallback dates
-                        date_label = "most recent trading day"
-                        fallback_found = True
-                        break
-                
-                # If no date has data in 8 AM - 4:30 PM range, use the most recent date with ANY data
-                if not fallback_found and len(unique_dates) > 0:
-                    logger.warning("No date found with data between 8 AM - 4:30 PM. Using most recent date with any data...")
-                    most_recent_date = unique_dates[0]
-                    df_fallback_check = df[df['datetime_et'].dt.date == most_recent_date]
-                    if len(df_fallback_check) > 0:
-                        logger.info(f"Using most recent date {most_recent_date} with {len(df_fallback_check)} total candles")
-                        target_date = most_recent_date
-                        session_end_time = time_end  # Always show full session for fallback dates
-                        date_label = "most recent available date"
-                        fallback_found = True
-        elif len(df_target_check) == 0 and target_date == current_date:
-            # Today has no data, but we should still show today's session (fill with previous day's data)
-            logger.info(f"No data for today ({target_date}) yet, but showing today's session with gap filling from previous day")
-        
-        # Handle different view modes for data filtering
-        if view_mode in ['lastWeek', 'lastMonth']:
-            # For multi-day views, show all data without time filtering
-            logger.info(f"View mode {view_mode}: Showing all data from last {period_value} days (no time filtering)")
-            df_filtered = df.copy()  # Use all data, sorted by datetime
-            df_filtered = df_filtered.sort_values('datetime_et')
-            date_label = f"last {period_value} days (all data)"
-        elif target_date is None:
-            # Fallback: if target_date is None, show all data
-            logger.info("No target date specified, showing all available data")
-            df_filtered = df.copy()
-            df_filtered = df_filtered.sort_values('datetime_et')
+            # Filter each day to 8 AM - 4:30 PM ET
+            df_filtered_list = []
+            for date in unique_dates:
+                day_data = df[
+                    (df['datetime_et'].dt.date == date) &
+                    (df['datetime_et'].dt.time >= time_start) &
+                    (df['datetime_et'].dt.time <= time_end)
+                ].copy()
+                if len(day_data) > 0:
+                    df_filtered_list.append(day_data)
+                    logger.debug(f"Date {date}: {len(day_data)} candles (8 AM - 4:30 PM ET)")
+            
+            if df_filtered_list:
+                df_filtered = pd.concat(df_filtered_list, ignore_index=True).sort_values('datetime_et')
+                logger.info(f"Returning {len(df_filtered)} candles across {len(unique_dates)} days (each day: 8 AM - 4:30 PM ET)")
+                date_label = f"{len(unique_dates)} days (8:00 AM - 4:30 PM ET per day)"
+            else:
+                logger.warning("No data found for any day in the requested period")
+                df_filtered = pd.DataFrame()  # Empty dataframe
+                date_label = "no data available"
         else:
+            logger.warning("No data fetched from API")
+            df_filtered = pd.DataFrame()  # Empty dataframe
+            date_label = "no data available"
+        
+        
+        # Legacy view mode handling (kept for backward compatibility, but not used)
+        if False:  # Disabled - always use multi-day approach above
             # Log final target date decision
             logger.info(f"Final target date: {target_date} (current_date: {current_date}, yesterday_date: {yesterday_date})")
             logger.info(f"Session end time: {session_end_time.strftime('%I:%M %p') if session_end_time else 'all'}, Date label: {date_label}")
@@ -409,10 +323,23 @@ def get_chart_data(symbol: str):
                             # Also adjust the original datetime column to match
                             if 'datetime' in fill_row.columns:
                                 # Convert ET datetime to UTC for the datetime column
-                                # Fix pandas FutureWarning by explicitly converting to compatible dtype
+                                # Fix pandas FutureWarning by ensuring dtype compatibility
                                 utc_datetime = adjusted_datetime_et.astimezone(pytz.UTC).replace(tzinfo=None)
-                                # Convert to pandas Timestamp to ensure dtype compatibility
-                                fill_row.loc[fill_row.index[0], 'datetime'] = pd.Timestamp(utc_datetime)
+                                
+                                # Get the existing dtype of the datetime column
+                                existing_dtype = fill_row['datetime'].dtype
+                                
+                                # Convert to match the existing dtype
+                                if 'UTC' in str(existing_dtype) or 'timezone' in str(existing_dtype).lower():
+                                    # Column is timezone-aware, keep it timezone-aware
+                                    utc_timestamp = pd.Timestamp(utc_datetime, tz='UTC')
+                                    fill_row.loc[fill_row.index[0], 'datetime'] = utc_timestamp
+                                else:
+                                    # Column is naive, convert to naive timestamp
+                                    naive_timestamp = pd.Timestamp(utc_datetime)
+                                    # Explicitly cast to match existing dtype
+                                    fill_row['datetime'] = fill_row['datetime'].astype('datetime64[ns]')
+                                    fill_row.loc[fill_row.index[0], 'datetime'] = naive_timestamp
                             df_complete.append(fill_row)
                             logger.debug(f"Filled {slot_time.strftime('%I:%M %p')} with previous day's data")
                         # If no previous day data either, skip this slot (shouldn't happen if we have enough historical data)
@@ -567,6 +494,18 @@ def get_chart_data(symbol: str):
                 })
         
         logger.info(f"Chart data retrieved for {symbol}: {len(chart_data['candles'])} candles")
+        
+        # Log summary for all days returned
+        if len(chart_data['candles']) > 0:
+            first_candle_time = chart_data['candles'][0]['time']
+            last_candle_time = chart_data['candles'][-1]['time']
+            first_date = datetime.fromtimestamp(first_candle_time / 1000)
+            last_date = datetime.fromtimestamp(last_candle_time / 1000)
+            days_span = (last_date - first_date).days + 1
+            logger.info(f"Chart data summary: {len(chart_data['candles'])} candles spanning {days_span} days ({first_date.date()} to {last_date.date()})")
+        else:
+            logger.warning(f"Chart returned 0 candles - check if data is available for {symbol}")
+        
         return jsonify(chart_data), 200
         
     except Exception as e:

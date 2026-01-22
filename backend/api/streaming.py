@@ -99,24 +99,38 @@ class SchwabStreamer:
         
         # If still not found, try to get from accounts endpoint as fallback
         if not self.schwab_client_customer_id:
-            logger.warning("CustomerId not found in user preferences. Streamer connection may fail.")
-            logger.debug("Attempting to get customer ID from accounts endpoint...")
+            logger.warning("CustomerId not found in user preferences. Attempting to get from accounts endpoint...")
             try:
                 from api.orders import SCHWAB_ACCOUNTS_URL
                 accounts_response = schwab_api_request("GET", SCHWAB_ACCOUNTS_URL, access_token)
                 accounts_data = accounts_response.json()
+                
+                # Handle both single object and array responses
+                if isinstance(accounts_data, dict):
+                    accounts_data = [accounts_data]
+                
                 if accounts_data and len(accounts_data) > 0:
                     # Try to extract customer ID from first account
+                    # For Streamer API, we need the accountNumber (plain text account ID)
                     first_account = accounts_data[0]
-                    self.schwab_client_customer_id = (
+                    sec_account = first_account.get("securitiesAccount", first_account)
+                    
+                    # Try multiple possible fields for account number
+                    account_number = (
+                        sec_account.get('accountNumber') or
                         first_account.get('accountNumber') or
-                        first_account.get('hashValue') or
+                        str(sec_account.get('accountId', '')) or
                         str(first_account.get('accountId', ''))
                     )
-                    if self.schwab_client_customer_id:
-                        logger.info(f"Retrieved CustomerId from accounts endpoint: {self.schwab_client_customer_id}")
+                    
+                    if account_number:
+                        self.schwab_client_customer_id = str(account_number).strip()
+                        logger.info(f"✓ Retrieved CustomerId from accounts endpoint: {self.schwab_client_customer_id}")
+                    else:
+                        logger.warning("Account number not found in accounts response structure")
+                        logger.debug(f"Accounts response structure: {json.dumps(accounts_data[0], indent=2, default=str)}")
             except Exception as e:
-                logger.error(f"Failed to get CustomerId from accounts endpoint: {e}")
+                logger.error(f"Failed to get CustomerId from accounts endpoint: {e}", exc_info=True)
         
         self.schwab_client_correl_id = str(uuid.uuid4())
         self.schwab_client_channel = prefs.get('schwabClientChannel') or prefs.get('channel', 'IO')

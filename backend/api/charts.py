@@ -268,46 +268,42 @@ def get_chart_data(symbol: str):
                 logger.warning(f"⚠️ No raw data found for today ({current_date}) in API response!")
                 logger.warning(f"  This might mean: market hasn't opened yet, it's a weekend/holiday, or API doesn't return today's data")
             
-            # Filter each day to 8 AM - 4:30 PM ET (or current time for today)
+            # Filter each day to 8 AM - 4:30 PM ET
+            # IMPORTANT: For today, include ALL data regardless of time (to ensure today's data is always visible)
             df_filtered_list = []
             for date in unique_dates:
-                # For today, use current time if before 4:30 PM, otherwise use 4:30 PM
                 if date == current_date:
-                    # Today: Always show all available data up to 4:30 PM ET
-                    # Don't filter by current time - show all of today's data that exists
-                    # This ensures today's data is always visible regardless of when you check
-                    day_end_time = time_end  # Always use 4:30 PM for today
-                    logger.info(f"Today ({date}): Filtering to 8:00 AM - 4:30 PM ET (showing all available today's data)")
-                else:
-                    # Historical days: always 8 AM - 4:30 PM
-                    day_end_time = time_end
-                
-                day_data = df[
-                    (df['datetime_et'].dt.date == date) &
-                    (df['datetime_et'].dt.time >= time_start) &
-                    (df['datetime_et'].dt.time <= day_end_time)
-                ].copy()
-                
-                if len(day_data) > 0:
-                    df_filtered_list.append(day_data)
-                    if date == current_date:
-                        logger.info(f"✓ Today ({date}): {len(day_data)} candles (8 AM - {day_end_time.strftime('%I:%M %p')} ET)")
+                    # TODAY: Include ALL data for today, regardless of time
+                    # This ensures today's data is always visible
+                    today_all_data = df[df['datetime_et'].dt.date == current_date].copy()
+                    if len(today_all_data) > 0:
+                        logger.info(f"✓ Today ({date}): Including ALL {len(today_all_data)} candles (no time filtering)")
+                        logger.info(f"  Today's data time range: {today_all_data['datetime_et'].min()} to {today_all_data['datetime_et'].max()}")
+                        df_filtered_list.append(today_all_data)
                     else:
-                        logger.debug(f"Date {date}: {len(day_data)} candles (8 AM - 4:30 PM ET)")
+                        logger.warning(f"✗ Today ({date}): No data found at all")
                 else:
-                    if date == current_date:
-                        logger.warning(f"✗ Today ({date}): No data found between 8:00 AM - {day_end_time.strftime('%I:%M %p')} ET")
-                        # Check if there's any data for today at all (even outside market hours)
-                        today_any_data = df[df['datetime_et'].dt.date == current_date]
-                        if len(today_any_data) > 0:
-                            logger.warning(f"  But found {len(today_any_data)} candles for today outside market hours")
-                            logger.warning(f"  Time range: {today_any_data['datetime_et'].min()} to {today_any_data['datetime_et'].max()}")
-                            # If we have today's data but it's outside market hours, include it anyway
-                            # This handles pre-market or after-hours data
-                            logger.info(f"  Including today's data even though it's outside 8 AM - 4:30 PM ET range")
-                            df_filtered_list.append(today_any_data)
+                    # Historical days: filter to 8 AM - 4:30 PM ET
+                    day_data = df[
+                        (df['datetime_et'].dt.date == date) &
+                        (df['datetime_et'].dt.time >= time_start) &
+                        (df['datetime_et'].dt.time <= time_end)
+                    ].copy()
+                    
+                    if len(day_data) > 0:
+                        df_filtered_list.append(day_data)
+                        logger.debug(f"Date {date}: {len(day_data)} candles (8 AM - 4:30 PM ET)")
                     else:
                         logger.debug(f"Date {date}: No data found (8 AM - 4:30 PM ET)")
+            
+            # Also check if today is NOT in unique_dates but exists in the data
+            # This handles edge cases where today's date might not be recognized
+            if current_date not in unique_dates:
+                today_check = df[df['datetime_et'].dt.date == current_date]
+                if len(today_check) > 0:
+                    logger.warning(f"⚠️ Today ({current_date}) not in unique_dates but found {len(today_check)} candles - adding it")
+                    logger.warning(f"  Today's data time range: {today_check['datetime_et'].min()} to {today_check['datetime_et'].max()}")
+                    df_filtered_list.append(today_check)
             
             if df_filtered_list:
                 df_filtered = pd.concat(df_filtered_list, ignore_index=True).sort_values('datetime_et')
@@ -481,24 +477,18 @@ def get_chart_data(symbol: str):
             # to make ET times display correctly. We do this by converting ET to UTC timestamp,
             # but then adjusting it back so the chart displays it as ET time
             if 'datetime_et' in row and pd.notna(row['datetime_et']):
-                # CRITICAL FIX: Lightweight Charts doesn't support timezone conversion natively
-                # We must manually adjust timestamps so ET times display correctly
-                # Solution: Create a timestamp that represents ET time as if it were UTC
-                # This way, when the chart displays it as UTC, it shows the ET time
+                # CRITICAL: Lightweight Charts doesn't support timezone conversion natively
+                # We need to send the actual UTC timestamp, but the chart should display it in ET
+                # The chart's timeZone setting should handle the conversion
+                # However, if timeZone doesn't work, we need to adjust the timestamp
+                # 
+                # The correct approach: Use the UTC timestamp that corresponds to the ET time
+                # The chart library will then convert it based on timeZone setting
                 et_dt = row['datetime_et']
-                # Get the ET offset (ET is UTC-5 or UTC-4 depending on DST)
+                # Convert ET datetime to UTC to get the correct UTC timestamp
                 utc_dt = et_dt.astimezone(pytz.UTC)
-                # Calculate offset: how many hours ahead UTC is compared to ET
-                et_offset_hours = (utc_dt.hour - et_dt.hour) % 24
-                if et_offset_hours > 12:
-                    et_offset_hours -= 24
-                # Create a naive datetime with ET time values (treat as UTC for display)
-                naive_dt_et_as_utc = datetime(
-                    et_dt.year, et_dt.month, et_dt.day,
-                    et_dt.hour, et_dt.minute, et_dt.second
-                )
-                # Convert to timestamp - this will display as ET time in the chart
-                et_timestamp = int(pd.Timestamp(naive_dt_et_as_utc).timestamp() * 1000)
+                # Use the UTC timestamp - the chart should convert this to ET using timeZone setting
+                et_timestamp = int(pd.Timestamp(utc_dt).timestamp() * 1000)
             elif 'datetime' in row and pd.notna(row['datetime']):
                 # Fallback: if datetime is timezone-aware, use it directly
                 # If naive, assume it's UTC (from Schwab API)

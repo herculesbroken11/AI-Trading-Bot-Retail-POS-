@@ -436,9 +436,7 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
             lockVisibleTimeRangeOnResize: false,
             rightBarStaysOnScroll: false,
             shiftVisibleRangeOnNewBar: false,
-            // NOTE: Lightweight Charts doesn't support timezone conversion natively
-            // Timestamps are manually adjusted in backend to display ET times correctly
-            // We don't set timeZone here since it doesn't work - timestamps are pre-adjusted
+            timeZone: 'America/New_York', // Set timezone in initial options - this should convert UTC timestamps to ET
             visible: true,
           },
           width: containerWidth,

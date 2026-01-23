@@ -8,6 +8,8 @@ import pandas as pd
 from utils.logger import setup_logger
 from utils.helpers import load_tokens, schwab_api_request, get_valid_access_token
 from core.ov_engine import OVStrategyEngine
+# Import Streamer real-time data
+from api.streaming import latest_chart_data
 
 charts_bp = Blueprint('charts', __name__, url_prefix='/charts')
 logger = setup_logger("charts")
@@ -194,11 +196,78 @@ def get_chart_data(symbol: str):
         sma200_count = df['sma_200'].notna().sum() if 'sma_200' in df.columns else 0
         logger.info(f"Indicator calculation complete: {len(df)} total candles, MM8: {sma8_count}, MM20: {sma20_count}, MM200: {sma200_count} values calculated (frequency: {frequency}min)")
         
-        # Now filter data to show only TODAY's data from 8:00 AM ET to 4:30 PM ET
-        # Convert to ET timezone and filter
+        # Convert to ET timezone BEFORE combining with Streamer data
         # df['datetime'] is already UTC-aware from parsing above
         et = pytz.timezone('US/Eastern')
         df['datetime_et'] = df['datetime'].dt.tz_convert(et)
+        
+        # CRITICAL: Combine with Streamer real-time data for today BEFORE filtering
+        # The historical API may not return today's data, so we need to get it from Streamer
+        symbol_upper = symbol.upper()
+        streamer_candles_added = 0
+        if symbol_upper in latest_chart_data:
+            streamer_candle = latest_chart_data[symbol_upper]
+            logger.info(f"🔴 Found Streamer real-time data for {symbol_upper}: {streamer_candle}")
+            
+            # Convert Streamer candle to DataFrame row format
+            if streamer_candle.get('time') and streamer_candle.get('close'):
+                streamer_time_ms = streamer_candle.get('time')
+                streamer_dt_utc = pd.to_datetime(streamer_time_ms, unit='ms', utc=True)
+                streamer_dt_et = streamer_dt_utc.tz_convert(et)
+                
+                # Get current date in ET
+                now_et = datetime.now(et)
+                current_date = now_et.date()
+                
+                # Check if this is today's data
+                if streamer_dt_et.date() == current_date:
+                    logger.info(f"✅ Streamer candle is from today: {streamer_dt_et}")
+                    
+                    # Create a DataFrame row for the Streamer candle
+                    streamer_row = {
+                        'datetime': streamer_dt_utc,
+                        'datetime_et': streamer_dt_et,
+                        'open': streamer_candle.get('open') or streamer_candle.get('close'),
+                        'high': streamer_candle.get('high') or streamer_candle.get('close'),
+                        'low': streamer_candle.get('low') or streamer_candle.get('close'),
+                        'close': streamer_candle.get('close'),
+                        'volume': streamer_candle.get('volume') or 0
+                    }
+                    
+                    # Check if we already have this candle (by time, within 1 minute)
+                    existing_mask = (
+                        (df['datetime_et'].dt.date == current_date) &
+                        (abs((df['datetime_et'] - streamer_dt_et).dt.total_seconds()) < 60)
+                    )
+                    
+                    if existing_mask.sum() > 0:
+                        # Update existing candle with Streamer data (more recent)
+                        idx = df[existing_mask].index[0]
+                        for col in ['open', 'high', 'low', 'close', 'volume']:
+                            if col in streamer_row and streamer_row[col] is not None:
+                                df.at[idx, col] = streamer_row[col]
+                        logger.info(f"🔄 Updated existing candle with Streamer data: {streamer_dt_et}")
+                    else:
+                        # Add Streamer candle to main df (before filtering)
+                        streamer_df = pd.DataFrame([streamer_row])
+                        # Ensure all columns match
+                        for col in df.columns:
+                            if col not in streamer_df.columns:
+                                streamer_df[col] = None
+                        df = pd.concat([df, streamer_df], ignore_index=True)
+                        streamer_candles_added += 1
+                        logger.info(f"➕ Added Streamer real-time candle to main dataframe: {streamer_dt_et}")
+                else:
+                    logger.debug(f"Streamer candle is not from today: {streamer_dt_et.date()} (today is {current_date})")
+        else:
+            logger.warning(f"⚠️ No Streamer real-time data available for {symbol_upper}. Historical API may not return today's data.")
+        
+        if streamer_candles_added > 0:
+            logger.info(f"✅ Added {streamer_candles_added} Streamer candle(s) to historical data")
+            # Re-sort by datetime_et after adding Streamer data
+            df = df.sort_values('datetime_et').reset_index(drop=True)
+            # Recalculate indicators for the new data
+            df = ov_engine.calculate_indicators(df)
         
         # Get current time in ET timezone
         # Use pytz-aware datetime to ensure correct timezone handling
@@ -239,7 +308,7 @@ def get_chart_data(symbol: str):
             (df['datetime_et'] <= yesterday_end_et)
         ].copy()
         
-        logger.info(f"Today's data: {len(df_today)} candles")
+        logger.info(f"Today's data from historical API: {len(df_today)} candles")
         logger.info(f"Yesterday's data: {len(df_yesterday)} candles")
         
         # SIMPLIFIED: Always return all days with 8 AM - 4:30 PM filtering per day
@@ -502,18 +571,35 @@ def get_chart_data(symbol: str):
             # to make ET times display correctly. We do this by converting ET to UTC timestamp,
             # but then adjusting it back so the chart displays it as ET time
             if 'datetime_et' in row and pd.notna(row['datetime_et']):
-                # CRITICAL: Lightweight Charts doesn't support timezone conversion natively
-                # We need to send the actual UTC timestamp, but the chart should display it in ET
-                # The chart's timeZone setting should handle the conversion
-                # However, if timeZone doesn't work, we need to adjust the timestamp
+                # CRITICAL FIX: Lightweight Charts timeZone setting doesn't work properly
+                # We must manually adjust timestamps so ET times display correctly
+                # The chart displays timestamps as UTC, so we need to send timestamps that,
+                # when displayed as UTC, show the correct ET time values
                 # 
-                # The correct approach: Use the UTC timestamp that corresponds to the ET time
-                # The chart library will then convert it based on timeZone setting
+                # Solution: Get the ET datetime, extract its time components, create a naive
+                # datetime with those same time values (treating them as UTC), then convert to timestamp.
+                # When the chart displays this timestamp as UTC, it will show the ET time we want.
                 et_dt = row['datetime_et']
-                # Convert ET datetime to UTC to get the correct UTC timestamp
-                utc_dt = et_dt.astimezone(pytz.UTC)
-                # Use the UTC timestamp - the chart should convert this to ET using timeZone setting
-                et_timestamp = int(pd.Timestamp(utc_dt).timestamp() * 1000)
+                
+                # Get ET time components
+                et_year = et_dt.year
+                et_month = et_dt.month
+                et_day = et_dt.day
+                et_hour = et_dt.hour
+                et_minute = et_dt.minute
+                et_second = et_dt.second
+                
+                # Create a naive datetime with ET time values, but we'll treat it as UTC
+                # This is a "hack" - we're telling the chart "this is 8:00 AM UTC" when it's actually "8:00 AM ET"
+                # But since the chart displays UTC times, it will show "8:00 AM" which is what we want
+                naive_dt_with_et_time = datetime(
+                    et_year, et_month, et_day,
+                    et_hour, et_minute, et_second
+                )
+                
+                # Convert to timestamp (milliseconds)
+                # This timestamp, when displayed by the chart as UTC, will show the ET time we want
+                et_timestamp = int(pd.Timestamp(naive_dt_with_et_time).timestamp() * 1000)
             elif 'datetime' in row and pd.notna(row['datetime']):
                 # Fallback: if datetime is timezone-aware, use it directly
                 # If naive, assume it's UTC (from Schwab API)

@@ -619,7 +619,7 @@ class SchwabStreamer:
         
         for symbol in symbols:
             symbol = symbol.upper()
-        if callback:
+            if callback:
                 self.subscriptions[service][symbol] = callback
         
         if service_callback:

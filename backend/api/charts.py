@@ -259,29 +259,33 @@ def get_chart_data(symbol: str):
             logger.info(f"Current date (ET): {current_date}")
             logger.info(f"Is today in fetched data? {current_date in unique_dates}")
             
-            # Check if today's data exists in the raw data
-            today_raw_data = df[df['datetime_et'].dt.date == current_date]
-            logger.info(f"Raw today's data (before filtering): {len(today_raw_data)} candles")
+            # CRITICAL: Check if today's data exists in the raw data BEFORE any filtering
+            today_raw_data = df[df['datetime_et'].dt.date == current_date].copy()
+            logger.info(f"🔍 Raw today's data (before ANY filtering): {len(today_raw_data)} candles")
             if len(today_raw_data) > 0:
-                logger.info(f"Today's data time range: {today_raw_data['datetime_et'].min()} to {today_raw_data['datetime_et'].max()}")
+                logger.info(f"  Today's data time range: {today_raw_data['datetime_et'].min()} to {today_raw_data['datetime_et'].max()}")
+                logger.info(f"  Today's data times: {sorted(today_raw_data['datetime_et'].dt.time.unique())[:10]}...")  # Show first 10 unique times
             else:
-                logger.warning(f"⚠️ No raw data found for today ({current_date}) in API response!")
-                logger.warning(f"  This might mean: market hasn't opened yet, it's a weekend/holiday, or API doesn't return today's data")
+                logger.error(f"❌ NO DATA FOUND FOR TODAY ({current_date})!")
+                logger.error(f"  Available dates: {unique_dates}")
+                logger.error(f"  Data date range: {df['datetime_et'].min()} to {df['datetime_et'].max()}")
             
             # Filter each day to 8 AM - 4:30 PM ET
-            # IMPORTANT: For today, include ALL data regardless of time (to ensure today's data is always visible)
+            # CRITICAL: For today, ALWAYS include ALL data regardless of time
             df_filtered_list = []
+            today_included = False
+            
             for date in unique_dates:
                 if date == current_date:
-                    # TODAY: Include ALL data for today, regardless of time
-                    # This ensures today's data is always visible
+                    # TODAY: Include ALL data for today, NO time filtering
                     today_all_data = df[df['datetime_et'].dt.date == current_date].copy()
                     if len(today_all_data) > 0:
-                        logger.info(f"✓ Today ({date}): Including ALL {len(today_all_data)} candles (no time filtering)")
+                        logger.info(f"✅ Today ({date}): Including ALL {len(today_all_data)} candles (NO time filtering)")
                         logger.info(f"  Today's data time range: {today_all_data['datetime_et'].min()} to {today_all_data['datetime_et'].max()}")
                         df_filtered_list.append(today_all_data)
+                        today_included = True
                     else:
-                        logger.warning(f"✗ Today ({date}): No data found at all")
+                        logger.error(f"❌ Today ({date}): No data found even though date is in unique_dates!")
                 else:
                     # Historical days: filter to 8 AM - 4:30 PM ET
                     day_data = df[
@@ -296,19 +300,40 @@ def get_chart_data(symbol: str):
                     else:
                         logger.debug(f"Date {date}: No data found (8 AM - 4:30 PM ET)")
             
-            # Also check if today is NOT in unique_dates but exists in the data
-            # This handles edge cases where today's date might not be recognized
-            if current_date not in unique_dates:
-                today_check = df[df['datetime_et'].dt.date == current_date]
+            # CRITICAL FALLBACK: If today is NOT in unique_dates but exists in data, add it
+            if not today_included:
+                today_check = df[df['datetime_et'].dt.date == current_date].copy()
                 if len(today_check) > 0:
-                    logger.warning(f"⚠️ Today ({current_date}) not in unique_dates but found {len(today_check)} candles - adding it")
-                    logger.warning(f"  Today's data time range: {today_check['datetime_et'].min()} to {today_check['datetime_et'].max()}")
+                    logger.error(f"⚠️ Today ({current_date}) was NOT in unique_dates but found {len(today_check)} candles - FORCING inclusion")
+                    logger.error(f"  Today's data time range: {today_check['datetime_et'].min()} to {today_check['datetime_et'].max()}")
                     df_filtered_list.append(today_check)
+                    today_included = True
+                else:
+                    logger.error(f"❌ Today ({current_date}) has NO data in the API response!")
+                    logger.error(f"  This might mean: market hasn't opened yet, it's a weekend/holiday, or API doesn't return today's data")
             
             if df_filtered_list:
                 df_filtered = pd.concat(df_filtered_list, ignore_index=True).sort_values('datetime_et')
-                logger.info(f"Returning {len(df_filtered)} candles across {len(unique_dates)} days (historical: 8 AM - 4:30 PM ET, today: up to current time)")
-                date_label = f"{len(unique_dates)} days (8:00 AM - 4:30 PM ET per day, today up to current time)"
+                
+                # CRITICAL: Verify today's data is in the final result
+                today_in_final = df_filtered[df_filtered['datetime_et'].dt.date == current_date]
+                if len(today_in_final) > 0:
+                    logger.info(f"✅ VERIFIED: Today's data is in final result: {len(today_in_final)} candles")
+                    logger.info(f"  Today's final time range: {today_in_final['datetime_et'].min()} to {today_in_final['datetime_et'].max()}")
+                else:
+                    logger.error(f"❌ ERROR: Today's data is MISSING from final result!")
+                    logger.error(f"  Final data date range: {df_filtered['datetime_et'].min()} to {df_filtered['datetime_et'].max()}")
+                    logger.error(f"  Final unique dates: {sorted(df_filtered['datetime_et'].dt.date.unique())}")
+                    # Force include today's data if it exists in raw data
+                    if len(today_raw_data) > 0:
+                        logger.error(f"  FORCING today's data into final result...")
+                        df_filtered = pd.concat([df_filtered, today_raw_data], ignore_index=True).sort_values('datetime_et')
+                        logger.info(f"  After force-include: {len(df_filtered)} candles, today: {len(df_filtered[df_filtered['datetime_et'].dt.date == current_date])} candles")
+                
+                logger.info(f"Returning {len(df_filtered)} candles across {len(df_filtered['datetime_et'].dt.date.unique())} days")
+                final_dates = sorted(df_filtered['datetime_et'].dt.date.unique())
+                logger.info(f"Final dates in result: {final_dates}")
+                date_label = f"{len(final_dates)} days (8:00 AM - 4:30 PM ET per day, today: all available data)"
             else:
                 logger.warning("No data found for any day in the requested period")
                 df_filtered = pd.DataFrame()  # Empty dataframe

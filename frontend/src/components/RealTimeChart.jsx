@@ -500,26 +500,39 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
           
           console.log(`Chart visible range: ${daysDiff.toFixed(1)} days (from ${fromDate.toLocaleDateString()} to ${toDate.toLocaleDateString()})`)
           
-          // Check if user zoomed out beyond loaded data
+          // Check if user zoomed out to the LEFT (older data) - need to fetch more historical data
           const loadedRange = loadedDataRangeRef.current
           if (loadedRange.earliest && fromTimestamp < loadedRange.earliest) {
-            // User zoomed out to see older data - need to fetch more
+            // User zoomed out to see older data - calculate how many more days needed
             const daysNeeded = Math.ceil((loadedRange.earliest - fromTimestamp) / (1000 * 60 * 60 * 24))
-            const currentPeriodValue = loadedRange.periodValue || 20
+            const currentPeriodValue = loadedRange.periodValue || 10
             
-            // Only fetch if we're not already loading and we need significantly more data
-            if (!isLoadingOlderDataRef.current && daysNeeded > 5) {
-              console.log(`🔄 Zooming out: Need ${daysNeeded} more days of historical data (currently have ${currentPeriodValue} days)`)
+            console.log(`🔍 Zoom out detected: fromTimestamp=${fromTimestamp}, earliest=${loadedRange.earliest}, daysNeeded=${daysNeeded}`)
+            
+            // Fetch more data if we need at least 1 day more (lower threshold for responsiveness)
+            if (!isLoadingOlderDataRef.current && daysNeeded >= 1) {
+              console.log(`🔄 Zooming out LEFT: Need ${daysNeeded} more days of historical data (currently have ${currentPeriodValue} days)`)
               isLoadingOlderDataRef.current = true
               
               try {
-                await loadOlderChartData(daysNeeded + currentPeriodValue)
+                // Calculate new period value (add the days needed, but respect Schwab API limit of 10 for day periodType)
+                const newPeriodValue = Math.min(daysNeeded + currentPeriodValue, 10) // Cap at 10 for day periodType
+                console.log(`📥 Fetching ${newPeriodValue} days of data from Schwab API...`)
+                await loadOlderChartData(newPeriodValue)
               } catch (error) {
                 console.error('Failed to load older chart data:', error)
               } finally {
                 isLoadingOlderDataRef.current = false
               }
+            } else if (isLoadingOlderDataRef.current) {
+              console.log('⏳ Already loading older data, skipping...')
+            } else if (daysNeeded < 1) {
+              console.log(`ℹ️ Only need ${daysNeeded.toFixed(1)} days more, not fetching yet`)
             }
+          } else if (!loadedRange.earliest) {
+            console.log('⚠️ No earliest timestamp tracked yet, cannot determine if zoom out is needed')
+          } else {
+            console.log(`ℹ️ Zoom range is within loaded data: from=${fromTimestamp}, earliest=${loadedRange.earliest}`)
           }
         })
 
@@ -861,21 +874,25 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
     }
     
     // IMPORTANT: Schwab API limits period to max 10 when periodType=day
-    // If user needs more than 10 days, we need to use a different periodType
+    // When zooming out to the left, we need to fetch older data
+    // Strategy: Use month periodType to get more historical data
     const [_, periodType, frequency] = parseTimeframe(timeframe)
     let actualPeriodValue = newPeriodValue
     let actualPeriodType = periodType
     
-    // If requesting more than 10 days with periodType=day, switch to month
+    // If requesting more than 10 days, switch to month periodType to get older data
     if (periodType === 'day' && newPeriodValue > 10) {
       // Convert days to months (approximate: 1 month ≈ 20 trading days)
+      // Request enough months to cover the needed days
       actualPeriodType = 'month'
-      actualPeriodValue = Math.ceil(newPeriodValue / 20)
-      console.log(`⚠️ Requested ${newPeriodValue} days exceeds Schwab API limit (10 days). Using ${actualPeriodValue} month(s) instead.`)
-    } else if (periodType === 'day' && newPeriodValue > 10) {
-      // Cap at 10 if still using day
-      actualPeriodValue = 10
-      console.log(`⚠️ Capping period to 10 days (Schwab API limit for periodType=day)`)
+      actualPeriodValue = Math.max(1, Math.ceil(newPeriodValue / 20))
+      console.log(`📅 Requested ${newPeriodValue} days exceeds Schwab API limit (10 days for day). Using ${actualPeriodValue} month(s) to get older data.`)
+    } else if (periodType === 'day') {
+      // For day periodType, cap at 10 (Schwab API limit)
+      actualPeriodValue = Math.min(newPeriodValue, 10)
+      if (newPeriodValue > 10) {
+        console.log(`⚠️ Capping period to 10 days (Schwab API limit for periodType=day)`)
+      }
     }
     
     console.log(`🔄 Loading older historical data: ${actualPeriodValue} ${actualPeriodType}(s)`)

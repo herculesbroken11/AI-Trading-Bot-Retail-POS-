@@ -64,38 +64,66 @@ class SchwabStreamer:
         # Log the full preferences structure for debugging
         logger.debug(f"User preferences structure: {json.dumps(prefs, indent=2, default=str)}")
         
-        # Extract WebSocket URL
-        if 'streamerInfoUrl' in prefs:
+        # CRITICAL FIX: streamerInfo can be either a dict OR an array with one element
+        streamer_info = None
+        if 'streamerInfo' in prefs:
+            if isinstance(prefs['streamerInfo'], list) and len(prefs['streamerInfo']) > 0:
+                # streamerInfo is an array - get the first element
+                streamer_info = prefs['streamerInfo'][0]
+                logger.info("Found streamerInfo as array, using first element")
+            elif isinstance(prefs['streamerInfo'], dict):
+                # streamerInfo is a dict - use it directly
+                streamer_info = prefs['streamerInfo']
+                logger.info("Found streamerInfo as dict")
+        
+        # Extract WebSocket URL - PRIORITY: streamerInfo > top-level > default
+        if streamer_info:
+            # CRITICAL: Use streamerSocketUrl from streamerInfo (this is the correct URL!)
+            self.ws_url = (
+                streamer_info.get('streamerSocketUrl') or
+                streamer_info.get('url') or
+                streamer_info.get('streamerInfoUrl')
+            )
+            if self.ws_url:
+                logger.info(f"✓ Found WebSocket URL from streamerInfo: {self.ws_url}")
+        
+        # Fallback to top-level streamerInfoUrl
+        if not self.ws_url and 'streamerInfoUrl' in prefs:
             self.ws_url = prefs['streamerInfoUrl']
-        elif 'streamerInfo' in prefs and isinstance(prefs['streamerInfo'], dict):
-            self.ws_url = prefs['streamerInfo'].get('url') or prefs['streamerInfo'].get('streamerInfoUrl')
-        else:
-            # Search nested structures
+            logger.info(f"Found WebSocket URL from top-level streamerInfoUrl: {self.ws_url}")
+        
+        # Last resort: search nested structures
+        if not self.ws_url:
             for key, value in prefs.items():
                 if isinstance(value, dict) and 'streamerInfoUrl' in value:
                     self.ws_url = value['streamerInfoUrl']
+                    logger.info(f"Found WebSocket URL from nested structure: {self.ws_url}")
                     break
         
         if not self.ws_url:
             self.ws_url = os.getenv("SCHWAB_WS_URL", "wss://streamer.schwab.com")
-            logger.warning(f"streamerInfoUrl not found in preferences, using default: {self.ws_url}")
+            logger.warning(f"⚠️ WebSocket URL not found in preferences, using default: {self.ws_url}")
         
-        # Extract Customer ID - try multiple possible field names
-        self.schwab_client_customer_id = (
-            prefs.get('schwabClientCustomerId') or 
-            prefs.get('customerId') or
-            prefs.get('clientId') or
-            prefs.get('accountNumber')
-        )
+        # Extract Customer ID - PRIORITY: streamerInfo.schwabClientCustomerId > top-level > accounts
+        # CRITICAL: Use schwabClientCustomerId from streamerInfo (this is the correct Customer ID!)
+        if streamer_info:
+            self.schwab_client_customer_id = (
+                streamer_info.get('schwabClientCustomerId') or
+                streamer_info.get('customerId') or
+                streamer_info.get('clientId')
+            )
+            if self.schwab_client_customer_id:
+                logger.info(f"✓ Found Customer ID from streamerInfo: {self.schwab_client_customer_id}")
         
-        # Also check in streamerInfo nested object
-        if not self.schwab_client_customer_id and 'streamerInfo' in prefs:
-            if isinstance(prefs['streamerInfo'], dict):
-                self.schwab_client_customer_id = (
-                    prefs['streamerInfo'].get('schwabClientCustomerId') or
-                    prefs['streamerInfo'].get('customerId') or
-                    prefs['streamerInfo'].get('clientId')
-                )
+        # Fallback to top-level
+        if not self.schwab_client_customer_id:
+            self.schwab_client_customer_id = (
+                prefs.get('schwabClientCustomerId') or 
+                prefs.get('customerId') or
+                prefs.get('clientId')
+            )
+            if self.schwab_client_customer_id:
+                logger.info(f"Found Customer ID from top-level: {self.schwab_client_customer_id}")
         
         # If still not found, try to get from accounts endpoint as fallback
         if not self.schwab_client_customer_id:
@@ -132,9 +160,17 @@ class SchwabStreamer:
             except Exception as e:
                 logger.error(f"Failed to get CustomerId from accounts endpoint: {e}", exc_info=True)
         
-        self.schwab_client_correl_id = str(uuid.uuid4())
-        self.schwab_client_channel = prefs.get('schwabClientChannel') or prefs.get('channel', 'IO')
-        self.schwab_client_function_id = prefs.get('schwabClientFunctionId') or prefs.get('functionId', 'APIAPP')
+        # Extract other config from streamerInfo (if available) or top-level
+        if streamer_info:
+            self.schwab_client_correl_id = streamer_info.get('schwabClientCorrelId') or str(uuid.uuid4())
+            self.schwab_client_channel = streamer_info.get('schwabClientChannel') or prefs.get('schwabClientChannel') or prefs.get('channel', 'IO')
+            self.schwab_client_function_id = streamer_info.get('schwabClientFunctionId') or prefs.get('schwabClientFunctionId') or prefs.get('functionId', 'APIAPP')
+        else:
+            self.schwab_client_correl_id = str(uuid.uuid4())
+            self.schwab_client_channel = prefs.get('schwabClientChannel') or prefs.get('channel', 'IO')
+            self.schwab_client_function_id = prefs.get('schwabClientFunctionId') or prefs.get('functionId', 'APIAPP')
+        
+        logger.info(f"Streamer config extracted: Channel={self.schwab_client_channel}, FunctionId={self.schwab_client_function_id}, CorrelId={self.schwab_client_correl_id}")
         
         if not self.schwab_client_customer_id:
             logger.error("CRITICAL: CustomerId is None! Streamer connection will fail with 404 error.")
@@ -870,12 +906,26 @@ def get_streamer_diagnostics():
         ws_url = None
         customer_id = None
         
-        # Try to find WebSocket URL
-        if 'streamerInfoUrl' in prefs:
+        # CRITICAL FIX: streamerInfo can be either a dict OR an array with one element
+        streamer_info = None
+        if 'streamerInfo' in prefs:
+            if isinstance(prefs['streamerInfo'], list) and len(prefs['streamerInfo']) > 0:
+                streamer_info = prefs['streamerInfo'][0]
+            elif isinstance(prefs['streamerInfo'], dict):
+                streamer_info = prefs['streamerInfo']
+        
+        # Try to find WebSocket URL - PRIORITY: streamerInfo > top-level > default
+        if streamer_info:
+            ws_url = (
+                streamer_info.get('streamerSocketUrl') or
+                streamer_info.get('url') or
+                streamer_info.get('streamerInfoUrl')
+            )
+        
+        if not ws_url and 'streamerInfoUrl' in prefs:
             ws_url = prefs['streamerInfoUrl']
-        elif 'streamerInfo' in prefs and isinstance(prefs['streamerInfo'], dict):
-            ws_url = prefs['streamerInfo'].get('url') or prefs['streamerInfo'].get('streamerInfoUrl')
-        else:
+        
+        if not ws_url:
             # Search nested structures
             for key, value in prefs.items():
                 if isinstance(value, dict) and 'streamerInfoUrl' in value:
@@ -885,21 +935,20 @@ def get_streamer_diagnostics():
         if not ws_url:
             ws_url = os.getenv("SCHWAB_WS_URL", "wss://streamer.schwab.com")
         
-        # Try to find Customer ID
-        customer_id = (
-            prefs.get('schwabClientCustomerId') or 
-            prefs.get('customerId') or
-            prefs.get('clientId') or
-            prefs.get('accountNumber')
-        )
+        # Try to find Customer ID - PRIORITY: streamerInfo > top-level > accounts
+        if streamer_info:
+            customer_id = (
+                streamer_info.get('schwabClientCustomerId') or
+                streamer_info.get('customerId') or
+                streamer_info.get('clientId')
+            )
         
-        if not customer_id and 'streamerInfo' in prefs:
-            if isinstance(prefs['streamerInfo'], dict):
-                customer_id = (
-                    prefs['streamerInfo'].get('schwabClientCustomerId') or
-                    prefs['streamerInfo'].get('customerId') or
-                    prefs['streamerInfo'].get('clientId')
-                )
+        if not customer_id:
+            customer_id = (
+                prefs.get('schwabClientCustomerId') or 
+                prefs.get('customerId') or
+                prefs.get('clientId')
+            )
         
         # Try accounts endpoint as fallback
         if not customer_id:
@@ -923,9 +972,13 @@ def get_streamer_diagnostics():
             except Exception as e:
                 logger.warning(f"Failed to get CustomerId from accounts: {e}")
         
-        # Extract other config
-        channel = prefs.get('schwabClientChannel') or prefs.get('channel', 'IO')
-        function_id = prefs.get('schwabClientFunctionId') or prefs.get('functionId', 'APIAPP')
+        # Extract other config from streamerInfo (if available) or top-level
+        if streamer_info:
+            channel = streamer_info.get('schwabClientChannel') or prefs.get('schwabClientChannel') or prefs.get('channel', 'IO')
+            function_id = streamer_info.get('schwabClientFunctionId') or prefs.get('schwabClientFunctionId') or prefs.get('functionId', 'APIAPP')
+        else:
+            channel = prefs.get('schwabClientChannel') or prefs.get('channel', 'IO')
+            function_id = prefs.get('schwabClientFunctionId') or prefs.get('functionId', 'APIAPP')
         
         return jsonify({
             "websocket_config": {

@@ -591,7 +591,7 @@ class SchwabStreamer:
             if service in self.service_callbacks:
                 try:
                     self.service_callbacks[service](parsed)
-        except Exception as e:
+                except Exception as e:
                     logger.error(f"Error in screener callback: {e}")
     
     def _parse_screener_data(self, screener_data: Dict) -> Dict[str, Any]:

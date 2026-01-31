@@ -982,7 +982,7 @@ def get_streamer_diagnostics():
             channel = prefs.get('schwabClientChannel') or prefs.get('channel', 'IO')
             function_id = prefs.get('schwabClientFunctionId') or prefs.get('functionId', 'APIAPP')
         
-    return jsonify({
+        return jsonify({
             "websocket_config": {
                 "url": ws_url,
                 "url_source": "user_preferences" if ws_url != os.getenv("SCHWAB_WS_URL", "wss://streamer.schwab.com") else "default_env",
@@ -1003,7 +1003,7 @@ def get_streamer_diagnostics():
                 "customer_id_check": "Ensure CustomerId is present and correct (required for Streamer connection)",
                 "if_404_error": "The 404 error suggests the WebSocket URL or connection method may be incorrect"
             }
-    }), 200
+        }), 200
 
     except Exception as e:
         logger.error(f"Diagnostics failed: {e}", exc_info=True)

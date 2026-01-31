@@ -126,15 +126,24 @@ def get_chart_data(symbol: str):
             return jsonify({"error": "No valid access token available"}), 401
         
         # Build Schwab API request parameters
+        # CRITICAL: Add startDate/endDate in milliseconds to explicitly include TODAY
+        # Schwab API may omit today when using only period/periodType; explicit dates force inclusion
+        from_start = et.localize(datetime.combine(from_date, datetime.min.time()))
+        to_end = et.localize(datetime.combine(to_date, datetime.max.time()))
+        start_ms = int(from_start.timestamp() * 1000)
+        end_ms = int(to_end.timestamp() * 1000)
+        
         params = {
             "symbol": symbol.upper(),
             "periodType": period_type,
             "period": period_value,
             "frequencyType": frequency_type,
-            "frequency": frequency
+            "frequency": frequency,
+            "startDate": start_ms,
+            "endDate": end_ms,
         }
         
-        logger.info(f"Fetching data from Schwab API for {symbol}: periodType={period_type}, period={period_value}, frequencyType={frequency_type}, frequency={frequency}")
+        logger.info(f"Fetching data from Schwab API for {symbol}: periodType={period_type}, period={period_value}, startDate={from_date}, endDate={to_date} (explicit dates to include today)")
         
         try:
             response = schwab_api_request("GET", SCHWAB_HISTORICAL_URL, access_token, params=params)

@@ -59,19 +59,24 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
     }
   }, [propTimeframe])
 
+  // Effect 1: Load chart data when symbol, timeframe, viewMode, or refresh (lastUpdate) changes
+  // NOTE: lastUpdate triggers refresh every 30s - we do NOT unsubscribe from real-time here
   useEffect(() => {
     if (selectedSymbol) {
       loadChartData()
-      // Only subscribe to real-time data if viewing today (not historical)
-      if (viewMode === 'today') {
-        subscribeToRealtimeChart(selectedSymbol)
-      } else {
-        // Unsubscribe if switching to historical view
-        unsubscribeFromRealtimeChart(selectedSymbol)
-      }
     }
-    
-    // Cleanup on unmount or symbol change
+  }, [selectedSymbol, timeframe, lastUpdate, viewMode, customDate])
+
+  // Effect 2: Subscribe to real-time data ONLY when viewing today
+  // CRITICAL: Do NOT include lastUpdate - it fires every 30s and was causing immediate
+  // unsubscribe/resubscribe, breaking real-time data for today
+  useEffect(() => {
+    if (selectedSymbol && viewMode === 'today') {
+      subscribeToRealtimeChart(selectedSymbol)
+    } else if (selectedSymbol) {
+      unsubscribeFromRealtimeChart(selectedSymbol)
+    }
+
     return () => {
       if (realtimePollIntervalRef.current) {
         clearInterval(realtimePollIntervalRef.current)
@@ -81,7 +86,7 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
         unsubscribeFromRealtimeChart(selectedSymbol)
       }
     }
-  }, [selectedSymbol, timeframe, lastUpdate, viewMode, customDate])
+  }, [selectedSymbol, viewMode])
 
   // Function to update chart data
   const updateChartData = (data) => {

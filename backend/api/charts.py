@@ -589,17 +589,14 @@ def get_chart_data(symbol: str):
                 et_minute = et_dt.minute
                 et_second = et_dt.second
                 
-                # Create a naive datetime with ET time values, but we'll treat it as UTC
-                # This is a "hack" - we're telling the chart "this is 8:00 AM UTC" when it's actually "8:00 AM ET"
-                # But since the chart displays UTC times, it will show "8:00 AM" which is what we want
-                naive_dt_with_et_time = datetime(
-                    et_year, et_month, et_day,
-                    et_hour, et_minute, et_second
-                )
-                
-                # Convert to timestamp (milliseconds)
-                # This timestamp, when displayed by the chart as UTC, will show the ET time we want
-                et_timestamp = int(pd.Timestamp(naive_dt_with_et_time).timestamp() * 1000)
+                # CRITICAL FIX: The chart expects UTC timestamps
+                # We need to send the actual UTC timestamp that corresponds to the ET time
+                # The chart's timeZone setting should then convert it to ET for display
+                # 
+                # Convert ET datetime to UTC to get the correct UTC timestamp
+                utc_dt = et_dt.astimezone(pytz.UTC)
+                # Use the UTC timestamp - this is the correct timestamp for the actual moment in time
+                et_timestamp = int(utc_dt.timestamp() * 1000)
             elif 'datetime' in row and pd.notna(row['datetime']):
                 # Fallback: if datetime is timezone-aware, use it directly
                 # If naive, assume it's UTC (from Schwab API)

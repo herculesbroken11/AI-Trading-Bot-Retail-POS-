@@ -31,6 +31,7 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
   // Real-time streaming refs
   const realtimePollIntervalRef = useRef(null)
   const lastCandleTimeRef = useRef(null)
+  const lastChartCandleTimeRef = useRef(null) // Track last candle time ON CHART (seconds) - prevents "Cannot update oldest data"
   
   // Track loaded data range for dynamic loading
   const loadedDataRangeRef = useRef({ earliest: null, latest: null, periodValue: 0 })
@@ -173,6 +174,11 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
     if (candlestickSeriesRef.current) {
       candlestickSeriesRef.current.setData(candlestickData)
       console.log(`✅ Candlestick data set: ${candlestickData.length} candles`)
+      
+      // Track last candle time on chart - required for real-time updates (prevents "Cannot update oldest data")
+      if (candlestickData.length > 0) {
+        lastChartCandleTimeRef.current = candlestickData[candlestickData.length - 1].time
+      }
       
       // Log date range of loaded data
       if (candlestickData.length > 0) {
@@ -1145,9 +1151,19 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
     
     try {
       // Convert timestamp to seconds (TradingView expects seconds)
-      const timeInSeconds = Math.floor(candle.time / 1000)
+      // Streamer may send ms (>1e12) or seconds (<1e12)
+      const timeInSeconds = typeof candle.time === 'number' && candle.time > 1e12
+        ? Math.floor(candle.time / 1000)
+        : Math.floor(Number(candle.time))
       
-      // Update or append the candle
+      // CRITICAL: Lightweight Charts throws "Cannot update oldest data" when updating with
+      // a timestamp OLDER than the last bar. Only update if new candle is >= last chart candle.
+      const lastTime = lastChartCandleTimeRef.current
+      if (lastTime != null && timeInSeconds < lastTime) {
+        console.debug(`Skipping stale real-time candle: new=${timeInSeconds} < last=${lastTime}`)
+        return
+      }
+      
       const candleData = {
         time: timeInSeconds,
         open: parseFloat(candle.open),
@@ -1158,6 +1174,7 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
       
       // Use update() for real-time updates (updates the last candle or appends new one)
       candlestickSeriesRef.current.update(candleData)
+      lastChartCandleTimeRef.current = timeInSeconds
       
       // Update volume if available
       if (volumeSeriesRef.current && candle.volume !== undefined) {

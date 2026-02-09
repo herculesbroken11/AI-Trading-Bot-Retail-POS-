@@ -13,9 +13,13 @@ from utils.logger import setup_logger
 load_dotenv()
 logger = setup_logger("helpers")
 
+def _token_file_path() -> Path:
+    """Token file path relative to backend so it works regardless of cwd."""
+    return Path(__file__).resolve().parent.parent / "data" / "tokens.json"
+
 def load_tokens() -> Optional[Dict[str, Any]]:
-    """Load tokens from /data/tokens.json"""
-    token_file = Path("data/tokens.json")
+    """Load tokens from backend/data/tokens.json"""
+    token_file = _token_file_path()
     if token_file.exists():
         with open(token_file, 'r') as f:
             return json.load(f)
@@ -23,10 +27,10 @@ def load_tokens() -> Optional[Dict[str, Any]]:
 
 def save_tokens(tokens: Dict[str, Any]) -> None:
     """
-    Save tokens to /data/tokens.json
+    Save tokens to backend/data/tokens.json
     Also calculates and stores expires_at timestamp for automatic refresh.
     """
-    token_file = Path("data/tokens.json")
+    token_file = _token_file_path()
     token_file.parent.mkdir(parents=True, exist_ok=True)
     
     # Calculate expiration timestamp if expires_in is provided
@@ -73,18 +77,16 @@ def ensure_valid_token() -> Optional[str]:
         logger.warning("No access token found")
         return None
     
-    # Check if token is about to expire
+    # Check if token is about to expire or missing expires_at (e.g. old tokens)
     current_time = time.time()
     expires_at = tokens.get('expires_at')
+    needs_refresh = (
+        expires_at is None or  # No expires_at = treat as expired so we refresh and get it
+        current_time >= expires_at
+    )
     
-    if expires_at and current_time >= expires_at:
-        # Token expired or about to expire, refresh it
-        logger.info("Token expired or about to expire, refreshing...")
-        
-        if 'refresh_token' not in tokens:
-            logger.error("No refresh token available for automatic refresh")
-            return None
-        
+    if needs_refresh and tokens.get('refresh_token'):
+        logger.info("Token expired or about to expire (or no expires_at), refreshing...")
         try:
             from api.auth import refresh_access_token
             new_tokens = refresh_access_token(tokens['refresh_token'])
@@ -93,7 +95,15 @@ def ensure_valid_token() -> Optional[str]:
             return new_tokens.get('access_token')
         except Exception as e:
             logger.error(f"Automatic token refresh failed: {e}")
-            return None
+            if expires_at is None:
+                # Can't use old token if we had no expiry - we don't know if it's valid
+                return None
+            # Fall back to existing token (might still work for a short time)
+            return tokens.get('access_token')
+    
+    if needs_refresh and not tokens.get('refresh_token'):
+        logger.error("No refresh token available for automatic refresh. Please re-authenticate.")
+        return None
     
     # Token is still valid
     return tokens.get('access_token')
@@ -147,34 +157,60 @@ def schwab_api_request(
     include_content_type = method.upper() in ["POST", "PUT"]
     headers = get_schwab_headers(access_token, include_content_type=include_content_type)
     
-    try:
+    def _do_request():
         if method.upper() == "GET":
-            response = requests.get(url, headers=headers, params=params, timeout=30)
+            return requests.get(url, headers=headers, params=params, timeout=30)
         elif method.upper() == "POST":
-            response = requests.post(url, headers=headers, json=data, params=params, timeout=30)
+            return requests.post(url, headers=headers, json=data, params=params, timeout=30)
         elif method.upper() == "PUT":
-            response = requests.put(url, headers=headers, json=data, params=params, timeout=30)
+            return requests.put(url, headers=headers, json=data, params=params, timeout=30)
         elif method.upper() == "DELETE":
-            response = requests.delete(url, headers=headers, params=params, timeout=30)
+            return requests.delete(url, headers=headers, params=params, timeout=30)
         else:
             raise ValueError(f"Unsupported HTTP method: {method}")
-        
+    
+    try:
+        response = _do_request()
         response.raise_for_status()
         return response
     except requests.exceptions.HTTPError as e:
+        # On 401 Unauthorized, try to refresh token and retry once
+        if hasattr(e, 'response') and e.response is not None and e.response.status_code == 401:
+            tokens = load_tokens()
+            if tokens and tokens.get('refresh_token'):
+                try:
+                    from api.auth import refresh_access_token
+                    new_tokens = refresh_access_token(tokens['refresh_token'])
+                    save_tokens(new_tokens)
+                    new_token = new_tokens.get('access_token')
+                    if new_token:
+                        logger.info("Refreshed token after 401, retrying request")
+                        retry_headers = get_schwab_headers(new_token, include_content_type)
+                        if method.upper() == "GET":
+                            response = requests.get(url, headers=retry_headers, params=params, timeout=30)
+                        elif method.upper() == "POST":
+                            response = requests.post(url, headers=retry_headers, json=data, params=params, timeout=30)
+                        elif method.upper() == "PUT":
+                            response = requests.put(url, headers=retry_headers, json=data, params=params, timeout=30)
+                        elif method.upper() == "DELETE":
+                            response = requests.delete(url, headers=retry_headers, params=params, timeout=30)
+                        else:
+                            raise ValueError(f"Unsupported HTTP method: {method}")
+                        response.raise_for_status()
+                        return response
+                except Exception as refresh_err:
+                    logger.error(f"Retry after 401 failed (refresh or request): {refresh_err}")
         # For 400/401/403 errors, try to include response body for better debugging
         error_msg = str(e)
         if hasattr(e, 'response') and e.response is not None:
             if hasattr(e.response, 'text') and e.response.text:
                 try:
                     error_body = e.response.json()
-                    # Format the error body nicely
                     if isinstance(error_body, dict):
                         error_msg = f"{error_msg}. Response: {error_body}"
                     else:
                         error_msg = f"{error_msg}. Response: {error_body}"
-                except:
-                    # If not JSON, include text (truncated)
+                except Exception:
                     error_msg = f"{error_msg}. Response body: {e.response.text[:500]}"
         raise Exception(f"Schwab API request failed: {error_msg}")
     except requests.exceptions.RequestException as e:

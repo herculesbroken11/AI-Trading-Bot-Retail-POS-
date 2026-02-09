@@ -1150,11 +1150,17 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
     if (!candlestickSeriesRef.current || !candle.time) return
     
     try {
-      // Convert timestamp to seconds (TradingView expects seconds)
-      // Streamer may send ms (>1e12) or seconds (<1e12)
-      const timeInSeconds = typeof candle.time === 'number' && candle.time > 1e12
-        ? Math.floor(candle.time / 1000)
-        : Math.floor(Number(candle.time))
+      // Streamer sends UTC ms; chart shows "ET as UTC" (8:00–16:30) to match historical data
+      const utcMs = typeof candle.time === 'number' && candle.time > 1e12 ? candle.time : candle.time * 1000
+      const d = new Date(utcMs)
+      const etYear = parseInt(d.toLocaleString('en-US', { timeZone: 'America/New_York', year: 'numeric' }), 10)
+      const etMonth = parseInt(d.toLocaleString('en-US', { timeZone: 'America/New_York', month: 'numeric' }), 10) - 1
+      const etDay = parseInt(d.toLocaleString('en-US', { timeZone: 'America/New_York', day: 'numeric' }), 10)
+      const etHour = parseInt(d.toLocaleString('en-US', { timeZone: 'America/New_York', hour: '2-digit', hour12: false }), 10)
+      const etMinute = parseInt(d.toLocaleString('en-US', { timeZone: 'America/New_York', minute: '2-digit' }), 10) || 0
+      const etSecond = parseInt(d.toLocaleString('en-US', { timeZone: 'America/New_York', second: '2-digit' }), 10) || 0
+      const etAsUtcDate = new Date(Date.UTC(etYear, etMonth, etDay, etHour, etMinute, etSecond))
+      const timeInSeconds = Math.floor(etAsUtcDate.getTime() / 1000)
       
       // CRITICAL: Lightweight Charts throws "Cannot update oldest data" when updating with
       // a timestamp OLDER than the last bar. Only update if new candle is >= last chart candle.

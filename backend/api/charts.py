@@ -3,7 +3,7 @@ Chart Data API Endpoints
 Provides OHLCV data and indicators for real-time charting.
 """
 from flask import Blueprint, request, jsonify
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 import pandas as pd
 from utils.logger import setup_logger
 from utils.helpers import load_tokens, schwab_api_request, get_valid_access_token
@@ -580,32 +580,16 @@ def get_chart_data(symbol: str):
             # to make ET times display correctly. We do this by converting ET to UTC timestamp,
             # but then adjusting it back so the chart displays it as ET time
             if 'datetime_et' in row and pd.notna(row['datetime_et']):
-                # CRITICAL FIX: Lightweight Charts timeZone setting doesn't work properly
-                # We must manually adjust timestamps so ET times display correctly
-                # The chart displays timestamps as UTC, so we need to send timestamps that,
-                # when displayed as UTC, show the correct ET time values
-                # 
-                # Solution: Get the ET datetime, extract its time components, create a naive
-                # datetime with those same time values (treating them as UTC), then convert to timestamp.
-                # When the chart displays this timestamp as UTC, it will show the ET time we want.
+                # CRITICAL: Lightweight Charts displays timestamps as UTC and timeZone option doesn't work.
+                # Send timestamps that, when shown as UTC, display ET clock times (8:00–16:30).
+                # Build a naive datetime from ET components, treat it as UTC, then take timestamp.
                 et_dt = row['datetime_et']
-                
-                # Get ET time components
-                et_year = et_dt.year
-                et_month = et_dt.month
-                et_day = et_dt.day
-                et_hour = et_dt.hour
-                et_minute = et_dt.minute
-                et_second = et_dt.second
-                
-                # CRITICAL FIX: The chart expects UTC timestamps
-                # We need to send the actual UTC timestamp that corresponds to the ET time
-                # The chart's timeZone setting should then convert it to ET for display
-                # 
-                # Convert ET datetime to UTC to get the correct UTC timestamp
-                utc_dt = et_dt.astimezone(pytz.UTC)
-                # Use the UTC timestamp - this is the correct timestamp for the actual moment in time
-                et_timestamp = int(utc_dt.timestamp() * 1000)
+                naive_et_as_utc = datetime(
+                    et_dt.year, et_dt.month, et_dt.day,
+                    et_dt.hour, et_dt.minute, et_dt.second
+                )
+                # Treat as UTC so chart's UTC display shows 8:00, 9:00, ... 16:30 (ET times)
+                et_timestamp = int(naive_et_as_utc.replace(tzinfo=timezone.utc).timestamp() * 1000)
             elif 'datetime' in row and pd.notna(row['datetime']):
                 # Fallback: if datetime is timezone-aware, use it directly
                 # If naive, assume it's UTC (from Schwab API)

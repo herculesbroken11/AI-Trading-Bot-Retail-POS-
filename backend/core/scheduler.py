@@ -226,7 +226,7 @@ class TradingScheduler:
                 # AI analysis with chart image (if available)
                 if not market_summary:
                     market_summary = self.ov_engine.get_market_summary(df)
-                    ai_analyzer = self._get_ai_analyzer()
+                ai_analyzer = self._get_ai_analyzer()
                 ai_signal = ai_analyzer.analyze_market_data(symbol, market_summary, setup, chart_image)
                 
                 # Store chart in cache for dashboard display

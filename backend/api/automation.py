@@ -2,6 +2,7 @@
 Automation API Endpoints
 Control the automated trading scheduler.
 """
+import os
 import threading
 from flask import Blueprint, request, jsonify
 from utils.logger import setup_logger
@@ -62,17 +63,21 @@ def automation_status():
     """Get automation status."""
     global scheduler
     
+    paper = os.getenv("PAPER_TRADING", "").lower() in ("1", "true", "yes") or \
+            os.getenv("DRY_RUN", "").lower() in ("1", "true", "yes")
     if not scheduler:
         return jsonify({
             "status": "not_initialized",
-            "running": False
+            "running": False,
+            "paper_trading": paper,
         }), 200
     
     return jsonify({
         "status": "running" if scheduler.is_running else "stopped",
         "running": scheduler.is_running,
         "watchlist": scheduler.watchlist,
-        "market_hours": scheduler.is_market_hours() if scheduler else False
+        "market_hours": scheduler.is_market_hours() if scheduler else False,
+        "paper_trading": paper,
     }), 200
 
 @automation_bp.route('/watchlist', methods=['GET', 'POST'])

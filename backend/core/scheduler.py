@@ -289,26 +289,31 @@ class TradingScheduler:
                         
                         result = execute_signal_helper(ai_signal, access_token)
                         if result and result.get('status') == 'success':
-                            # Add to position manager
-                            position = {
-                                'symbol': symbol,
-                                'account_id': result.get('account_id'),
-                                'entry_price': ai_signal.get('entry'),
-                                'stop_loss': ai_signal.get('stop'),
-                                'take_profit': ai_signal.get('target'),
-                                'quantity': ai_signal.get('position_size', 0),
-                                'direction': 'LONG' if ai_signal.get('action') == 'BUY' else 'SHORT',
-                                'atr': market_summary.get('atr_14', 0),
-                                'setup_type': setup.get('type')
-                            }
-                            self.position_manager.add_position(position)
-                            logger.info(f"Position opened: {symbol}")
-                            
-                            # Log trade execution
-                            add_activity_log('success', 
-                                f'Trade executed: {ai_signal.get("action")} {symbol} @ ${ai_signal.get("entry", 0):.2f} (Setup: {setup.get("type")})',
-                                setup.get('type'),
-                                symbol)
+                            if result.get('paper_trade'):
+                                logger.info(f"Paper trade logged for {symbol} - no position opened")
+                                add_activity_log('info',
+                                    f'[PAPER] Would trade: {ai_signal.get("action")} {symbol} @ ${ai_signal.get("entry", 0):.2f} (Setup: {setup.get("type")})',
+                                    setup.get('type'),
+                                    symbol)
+                            else:
+                                # Add to position manager (real trade only)
+                                position = {
+                                    'symbol': symbol,
+                                    'account_id': result.get('account_id'),
+                                    'entry_price': ai_signal.get('entry'),
+                                    'stop_loss': ai_signal.get('stop'),
+                                    'take_profit': ai_signal.get('target'),
+                                    'quantity': ai_signal.get('position_size', 0),
+                                    'direction': 'LONG' if ai_signal.get('action') == 'BUY' else 'SHORT',
+                                    'atr': market_summary.get('atr_14', 0),
+                                    'setup_type': setup.get('type')
+                                }
+                                self.position_manager.add_position(position)
+                                logger.info(f"Position opened: {symbol}")
+                                add_activity_log('success',
+                                    f'Trade executed: {ai_signal.get("action")} {symbol} @ ${ai_signal.get("entry", 0):.2f} (Setup: {setup.get("type")})',
+                                    setup.get('type'),
+                                    symbol)
                         else:
                             add_activity_log('warning', f'Trade execution failed for {symbol}: {result.get("error", "Unknown error")}', None, symbol)
                     except Exception as e:

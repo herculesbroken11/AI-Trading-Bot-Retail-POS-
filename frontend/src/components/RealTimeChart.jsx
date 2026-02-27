@@ -10,8 +10,7 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
   const [timeframe, setTimeframe] = useState(propTimeframe || '2min')
   const [selectedSymbol, setSelectedSymbol] = useState(propSymbol || '')
   const [watchlist, setWatchlist] = useState([])
-  const [viewMode, setViewMode] = useState('today') // 'today', 'yesterday', 'lastWeek', 'lastMonth', 'custom'
-  const [customDate, setCustomDate] = useState('')
+  // Date filter removed - chart shows all data without date filter
   const [showIndicators, setShowIndicators] = useState({
     mm8: true,
     mm20: true,
@@ -66,16 +65,12 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
     if (selectedSymbol) {
       loadChartData()
     }
-  }, [selectedSymbol, timeframe, lastUpdate, viewMode, customDate])
+  }, [selectedSymbol, timeframe, lastUpdate])
 
-  // Effect 2: Subscribe to real-time data ONLY when viewing today
-  // CRITICAL: Do NOT include lastUpdate - it fires every 30s and was causing immediate
-  // unsubscribe/resubscribe, breaking real-time data for today
+  // Effect 2: Subscribe to real-time data (date filter removed - always show real-time)
   useEffect(() => {
-    if (selectedSymbol && viewMode === 'today') {
+    if (selectedSymbol) {
       subscribeToRealtimeChart(selectedSymbol)
-    } else if (selectedSymbol) {
-      unsubscribeFromRealtimeChart(selectedSymbol)
     }
 
     return () => {
@@ -87,7 +82,7 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
         unsubscribeFromRealtimeChart(selectedSymbol)
       }
     }
-  }, [selectedSymbol, viewMode])
+  }, [selectedSymbol])
 
   // Function to update chart data
   const updateChartData = (data) => {
@@ -105,8 +100,7 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
       sma_8_count: indicators.sma_8?.length || 0,
       sma_20_count: indicators.sma_20?.length || 0,
       sma_200_count: indicators.sma_200?.length || 0,
-      timeframe: timeframe,
-      viewMode: viewMode
+      timeframe: timeframe
     })
     
     // Log first and last candle timestamps to verify date range
@@ -789,17 +783,15 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
     setError(null)
     
     try {
-      // Parse timeframe
-      const [periodValue, periodType, frequency] = parseTimeframe(timeframe)
+      // Parse timeframe - returns { periodValue, periodType, frequencyType, frequency }
+      const { periodValue, periodType, frequencyType, frequency } = parseTimeframe(timeframe)
       
       // Always request all historical data (no view mode filtering)
-      // This allows the chart to show all days when zoomed out
       const urlParams = new URLSearchParams({
         periodType,
         periodValue: periodValue.toString(),
-        frequencyType: 'minute',
+        frequencyType,
         frequency: frequency.toString()
-        // No viewMode parameter - backend will return all days with 8 AM - 4:30 PM filtering per day
       })
       
       const response = await fetch(
@@ -848,29 +840,27 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
   }
 
   const parseTimeframe = (tf) => {
-    // Returns [periodValue, periodType, frequency]
-    // IMPORTANT: Schwab API limits period values when periodType=day to [1, 2, 3, 4, 5, 10]
-    // Request enough days to ensure we have 200+ candles for SMA200 calculation
-    // After filtering to 8 AM - 4:30 PM ET, we get ~510 minutes per day
-    // Use maximum allowed value (10 days) to get as much data as possible
+    // Returns { periodValue, periodType, frequencyType, frequency }
+    // Schwab API: frequencyType 'minute' supports 1,5,15,30 (NOT 60); 'daily' supports frequency=1
     switch (tf) {
       case '1min':
-        return [10, 'day', 1]  // Max 10 days (Schwab API limit) = ~5100 candles
+        return { periodValue: 10, periodType: 'day', frequencyType: 'minute', frequency: 1 }
       case '2min':
-        // 2min not supported, use 1min instead
-        return [10, 'day', 1]  // Max 10 days
+        return { periodValue: 10, periodType: 'day', frequencyType: 'minute', frequency: 1 }
       case '5min':
-        return [10, 'day', 5]  // Max 10 days = ~1020 candles
+        return { periodValue: 10, periodType: 'day', frequencyType: 'minute', frequency: 5 }
       case '15min':
-        return [10, 'day', 15]  // Max 10 days = ~340 candles
+        return { periodValue: 10, periodType: 'day', frequencyType: 'minute', frequency: 15 }
       case '30min':
-        return [10, 'day', 30]  // Max 10 days = ~170 candles
+        return { periodValue: 10, periodType: 'day', frequencyType: 'minute', frequency: 30 }
       case '1hour':
-        return [10, 'day', 60]  // Max 10 days = ~85 candles
+        // Schwab doesn't support 60min - use 30min (2 bars per hour)
+        return { periodValue: 10, periodType: 'day', frequencyType: 'minute', frequency: 30 }
       case '1day':
-        return [1, 'month', 1]
+        // Daily bars: need 10 months for 200+ bars (MM200)
+        return { periodValue: 10, periodType: 'month', frequencyType: 'daily', frequency: 1 }
       default:
-        return [10, 'day', 1]  // Default to max 10 days (Schwab API limit)
+        return { periodValue: 10, periodType: 'day', frequencyType: 'minute', frequency: 1 }
     }
   }
   
@@ -887,11 +877,11 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
     // IMPORTANT: Schwab API limits period to max 10 when periodType=day
     // When zooming out to the left, we need to fetch older data
     // Strategy: Use month periodType to get more historical data
-    const [_, periodType, frequency] = parseTimeframe(timeframe)
+    const { periodType, frequencyType, frequency } = parseTimeframe(timeframe)
     let actualPeriodValue = newPeriodValue
     let actualPeriodType = periodType
     
-    // If requesting more than 10 days, switch to month periodType to get older data
+    // If requesting more than 10 days for day periodType, switch to month
     if (periodType === 'day' && newPeriodValue > 10) {
       // Convert days to months (approximate: 1 month ≈ 20 trading days)
       // Request enough months to cover the needed days
@@ -914,7 +904,7 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
       const urlParams = new URLSearchParams({
         periodType: actualPeriodType,
         periodValue: actualPeriodValue.toString(),
-        frequencyType: 'minute',
+        frequencyType,
         frequency: frequency.toString()
       })
       
@@ -1271,44 +1261,7 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
               <option value="1hour">1 Hour</option>
               <option value="1day">1 Day</option>
             </select>
-            <select
-              value={viewMode}
-              onChange={(e) => {
-                setViewMode(e.target.value)
-                if (e.target.value !== 'custom') {
-                  setCustomDate('')
-                }
-              }}
-              style={{
-                padding: '8px 12px',
-                background: '#2a2f4a',
-                border: '1px solid #2a2f4a',
-                borderRadius: '5px',
-                color: '#e0e0e0',
-                fontSize: '14px'
-              }}
-            >
-              <option value="today">Today</option>
-              <option value="yesterday">Yesterday</option>
-              <option value="lastWeek">Last 5 Days</option>
-              <option value="lastMonth">Last 20 Days</option>
-              <option value="custom">Custom Date</option>
-            </select>
-            {viewMode === 'custom' && (
-              <input
-                type="date"
-                value={customDate}
-                onChange={(e) => setCustomDate(e.target.value)}
-                style={{
-                  padding: '8px 12px',
-                  background: '#2a2f4a',
-                  border: '1px solid #2a2f4a',
-                  borderRadius: '5px',
-                  color: '#e0e0e0',
-                  fontSize: '14px'
-                }}
-              />
-            )}
+            {/* Date filter removed per requirement - real-time chart shows all data without date filter */}
             <button
               onClick={loadChartData}
               disabled={loading}

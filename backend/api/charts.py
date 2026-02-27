@@ -69,29 +69,36 @@ def get_chart_data(symbol: str):
             minutes_per_day = 510  # 8 AM - 4:30 PM = ~8.5 hours = 510 minutes
             candles_per_day = minutes_per_day / frequency
             min_days_needed = max(1, int(200 / candles_per_day) + 1)  # +1 for safety margin
-            if period_value < min_days_needed:
+            if min_days_needed > 10:
+                # Need more than 10 days for MM200 - switch to month (Schwab day max is 10)
+                period_type = 'month'
+                period_value = max(1, (min_days_needed + 9) // 21)  # ~21 trading days per month
+                logger.info(f"Switching to periodType=month, period={period_value} for MM200 warmup (need {min_days_needed} days, frequency: {frequency}min)")
+            elif period_value < min_days_needed:
                 logger.info(f"Increasing period_value from {period_value} to {min_days_needed} to ensure MM200 has enough data (frequency: {frequency}min)")
                 period_value = min(min_days_needed, 10)  # Cap at 10 (Schwab API limit for day)
-                if period_value < min_days_needed:
-                    logger.warning(f"Requested {min_days_needed} days but Schwab API limit is 10 days for periodType=day. MM200 may not be fully calculated.")
-            logger.info(f"Requesting {period_value} days of data for historical chart display (Schwab API limit: 10 days for periodType=day)")
+            logger.info(f"Requesting {period_value} {period_type}(s) of data for historical chart display")
+        elif frequency_type == 'daily':
+            # For daily: need 200+ bars for MM200. ~21 trading days per month.
+            # Request extra months for warmup so MM200 extends from left edge
+            min_months_for_mm200 = max(1, 200 // 21 + 1)  # ~10 months for 200 bars
+            if period_type == 'month' and period_value < min_months_for_mm200 * 2:
+                # Request 2x to have warmup (trim first 200 bars before returning)
+                requested_months = min(20, max(period_value * 2, min_months_for_mm200 * 2))
+                logger.info(f"Increasing period_value from {period_value} to {requested_months} months for daily MM200 warmup")
+                period_value = requested_months
         
-        # Validate frequency for minute type
-        # Schwab API accepts various frequencies, but we'll use standard ones
-        if frequency_type == 'minute' and frequency not in [1, 5, 15, 30, 60]:
-            # Map invalid frequencies to closest valid one
+        # Validate frequency for minute type (Schwab does NOT support frequency=60)
+        if frequency_type == 'minute' and frequency not in [1, 5, 15, 30]:
+            # Map invalid frequencies to closest valid one (Schwab supports 1,5,15,30 only - no 60)
             if frequency == 2:
                 frequency = 1  # Map 2min to 1min
             elif frequency < 5:
                 frequency = 1
             elif frequency < 15:
                 frequency = 5
-            elif frequency < 30:
-                frequency = 15
-            elif frequency < 60:
-                frequency = 30
             else:
-                frequency = 60
+                frequency = 30  # 60 and higher map to 30min
             logger.warning(f"Invalid frequency {request.args.get('frequency')} for minute type, using {frequency} instead")
         
         # Calculate date range for Schwab API
@@ -211,10 +218,10 @@ def get_chart_data(symbol: str):
         df['datetime_et'] = df['datetime'].dt.tz_convert(et)
         
         # CRITICAL: Combine with Streamer real-time data for today BEFORE filtering
-        # The historical API may not return today's data, so we need to get it from Streamer
+        # (Skip for daily frequency - Streamer is intraday only)
         symbol_upper = symbol.upper()
         streamer_candles_added = 0
-        if symbol_upper in latest_chart_data:
+        if frequency_type != 'daily' and symbol_upper in latest_chart_data:
             streamer_candle = latest_chart_data[symbol_upper]
             logger.info(f"🔴 Found Streamer real-time data for {symbol_upper}: {streamer_candle}")
             
@@ -331,7 +338,12 @@ def get_chart_data(symbol: str):
         logger.info(f"Total candles fetched from API: {len(df)}")
         logger.info(f"Current time in ET: {now_et} (Hour: {current_hour}, Date: {current_date})")
         
-        if len(df) > 0:
+        if frequency_type == 'daily':
+            # Daily frequency: no intraday filtering - 1 bar per day, use data as-is
+            df_filtered = df.sort_values('datetime_et').copy() if len(df) > 0 else pd.DataFrame()
+            date_label = f"{len(df_filtered)} daily bars" if len(df_filtered) > 0 else "no data available"
+            logger.info(f"Daily frequency: using {len(df_filtered)} bars as-is (no 8AM-4:30PM filter)")
+        elif len(df) > 0:
             unique_dates = sorted(df['datetime_et'].dt.date.unique())
             logger.info(f"Unique dates in fetched data: {unique_dates} (total: {len(unique_dates)} days)")
             logger.info(f"Current date (ET): {current_date}")
@@ -421,6 +433,13 @@ def get_chart_data(symbol: str):
             df_filtered = pd.DataFrame()  # Empty dataframe
             date_label = "no data available"
         
+        # MM200 warmup: trim first 200 rows so MM200 extends from left edge of chart
+        # (SMA200 needs 200 bars; first 199 are NaN - by trimming we start display where MM200 has values)
+        if len(df_filtered) > 200 and 'sma_200' in df_filtered.columns:
+            warmup = 200
+            before = len(df_filtered)
+            df_filtered = df_filtered.iloc[warmup:].reset_index(drop=True)
+            logger.info(f"MM200 warmup: trimmed first {warmup} bars, returning {len(df_filtered)} (was {before})")
         
         # Legacy view mode handling (kept for backward compatibility, but not used)
         if False:  # Disabled - always use multi-day approach above

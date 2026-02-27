@@ -335,9 +335,16 @@ def place_order():
         logger.error(f"Failed to place order: {e}")
         return jsonify({"error": str(e)}), 500
 
+def _is_paper_trading() -> bool:
+    """Return True if PAPER_TRADING or DRY_RUN is set (no real orders)."""
+    return os.getenv("PAPER_TRADING", "").lower() in ("1", "true", "yes") or \
+           os.getenv("DRY_RUN", "").lower() in ("1", "true", "yes")
+
+
 def execute_signal_helper(signal: dict, access_token: str) -> dict:
     """
     Helper function to execute a trading signal (can be called directly).
+    If PAPER_TRADING or DRY_RUN=true, logs the trade and returns success without placing real orders.
     
     Args:
         signal: Signal dictionary with symbol, action, entry, stop, target, etc.
@@ -350,6 +357,18 @@ def execute_signal_helper(signal: dict, access_token: str) -> dict:
     is_valid, error_msg = validate_trade_signal(signal)
     if not is_valid:
         raise ValueError(error_msg)
+
+    if _is_paper_trading():
+        logger.info(
+            f"[PAPER TRADE] Would execute: {signal.get('action')} {signal.get('symbol')} "
+            f"qty={signal.get('position_size')} @ {signal.get('entry')} stop={signal.get('stop')} target={signal.get('target')}"
+        )
+        return {
+            "status": "success",
+            "paper_trade": True,
+            "message": "Paper trading mode - no real order placed",
+            "account_id": signal.get("accountId", ""),
+        }
     
     # Get account ID if not provided
     account_id = signal.get("accountId")

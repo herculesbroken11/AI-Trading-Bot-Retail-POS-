@@ -520,8 +520,8 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
               isLoadingOlderDataRef.current = true
               
               try {
-                // Calculate new period value (add the days needed, but respect Schwab API limit of 10 for day periodType)
-                const newPeriodValue = Math.min(daysNeeded + currentPeriodValue, 10) // Cap at 10 for day periodType
+                // Backend chunks into 10-day API calls; allow up to 60 days for zoom-out
+                const newPeriodValue = Math.min(Math.ceil(daysNeeded) + currentPeriodValue, 60)
                 console.log(`📥 Fetching ${newPeriodValue} days of data from Schwab API...`)
                 await loadOlderChartData(newPeriodValue)
               } catch (error) {
@@ -841,26 +841,28 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
 
   const parseTimeframe = (tf) => {
     // Returns { periodValue, periodType, frequencyType, frequency }
-    // Schwab API: frequencyType 'minute' supports 1,5,15,30 (NOT 60); 'daily' supports frequency=1
+    // Schwab API: periodType=day max 10 per call; backend chunks into multiple calls for >10 days
+    // periodType=month valid period: 1,2,3,6 only
+    const MINUTE_DAYS = 20  // Request 20 days for minute charts (backend fetches in 10-day chunks)
     switch (tf) {
       case '1min':
-        return { periodValue: 10, periodType: 'day', frequencyType: 'minute', frequency: 1 }
+        return { periodValue: MINUTE_DAYS, periodType: 'day', frequencyType: 'minute', frequency: 1 }
       case '2min':
-        return { periodValue: 10, periodType: 'day', frequencyType: 'minute', frequency: 1 }
+        return { periodValue: MINUTE_DAYS, periodType: 'day', frequencyType: 'minute', frequency: 1 }
       case '5min':
-        return { periodValue: 10, periodType: 'day', frequencyType: 'minute', frequency: 5 }
+        return { periodValue: MINUTE_DAYS, periodType: 'day', frequencyType: 'minute', frequency: 5 }
       case '15min':
-        return { periodValue: 10, periodType: 'day', frequencyType: 'minute', frequency: 15 }
+        return { periodValue: MINUTE_DAYS, periodType: 'day', frequencyType: 'minute', frequency: 15 }
       case '30min':
-        return { periodValue: 10, periodType: 'day', frequencyType: 'minute', frequency: 30 }
+        return { periodValue: MINUTE_DAYS, periodType: 'day', frequencyType: 'minute', frequency: 30 }
       case '1hour':
         // Schwab doesn't support 60min - use 30min (2 bars per hour)
-        return { periodValue: 10, periodType: 'day', frequencyType: 'minute', frequency: 30 }
+        return { periodValue: MINUTE_DAYS, periodType: 'day', frequencyType: 'minute', frequency: 30 }
       case '1day':
-        // Daily bars: need 10 months for 200+ bars (MM200)
-        return { periodValue: 10, periodType: 'month', frequencyType: 'daily', frequency: 1 }
+        // Daily bars: Schwab periodType=month only allows period 1,2,3,6. Use 6 for ~6 months.
+        return { periodValue: 6, periodType: 'month', frequencyType: 'daily', frequency: 1 }
       default:
-        return { periodValue: 10, periodType: 'day', frequencyType: 'minute', frequency: 1 }
+        return { periodValue: 20, periodType: 'day', frequencyType: 'minute', frequency: 1 }
     }
   }
   
@@ -874,25 +876,17 @@ function RealTimeChart({ symbol: propSymbol, lastUpdate, timeframe: propTimefram
       return
     }
     
-    // IMPORTANT: Schwab API limits period to max 10 when periodType=day
-    // When zooming out to the left, we need to fetch older data
-    // Strategy: Use month periodType to get more historical data
+    // Backend supports >10 days for minute via multiple API calls
     const { periodType, frequencyType, frequency } = parseTimeframe(timeframe)
     let actualPeriodValue = newPeriodValue
     let actualPeriodType = periodType
     
-    // If requesting more than 10 days for day periodType, switch to month
-    if (periodType === 'day' && newPeriodValue > 10) {
-      // Convert days to months (approximate: 1 month ≈ 20 trading days)
-      // Request enough months to cover the needed days
-      actualPeriodType = 'month'
-      actualPeriodValue = Math.max(1, Math.ceil(newPeriodValue / 20))
-      console.log(`📅 Requested ${newPeriodValue} days exceeds Schwab API limit (10 days for day). Using ${actualPeriodValue} month(s) to get older data.`)
-    } else if (periodType === 'day') {
-      // For day periodType, cap at 10 (Schwab API limit)
-      actualPeriodValue = Math.min(newPeriodValue, 10)
-      if (newPeriodValue > 10) {
-        console.log(`⚠️ Capping period to 10 days (Schwab API limit for periodType=day)`)
+    // For daily charts (periodType=month): period valid values are 1, 2, 3, 6 only
+    if (periodType === 'month') {
+      const validMonths = [1, 2, 3, 6]
+      actualPeriodValue = Math.min(6, Math.max(1, newPeriodValue))
+      if (!validMonths.includes(actualPeriodValue)) {
+        actualPeriodValue = validMonths.reduce((a, b) => Math.abs(b - newPeriodValue) < Math.abs(a - newPeriodValue) ? b : a)
       }
     }
     

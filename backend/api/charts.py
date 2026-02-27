@@ -48,17 +48,16 @@ def get_chart_data(symbol: str):
         # view_mode = request.args.get('viewMode', 'today')  # No longer used
         # custom_date = request.args.get('customDate', None)  # No longer used
         
-        # IMPORTANT: Schwab API limits period values when periodType=day
-        # Valid values for periodType=day: [1, 2, 3, 4, 5, 10]
-        # We must cap period_value to 10 for day periodType
-        if period_type == 'day':
+        # Schwab API: periodType=day valid period: 1, 2, 3, 4, 5, 10 (max 10 per call)
+        # For >10 days of minute data, we make multiple calls and merge (see below)
+        requested_days = period_value  # Keep original request for multi-call logic
+        if period_type == 'day' and period_value not in [1, 2, 3, 4, 5, 10]:
             if period_value > 10:
-                logger.warning(f"period_value {period_value} exceeds Schwab API limit for periodType=day (max 10). Capping to 10.")
-                period_value = 10
-            elif period_value not in [1, 2, 3, 4, 5, 10]:
-                # Round to nearest valid value
+                pass  # Will use multi-call; keep requested_days
+            else:
                 valid_periods = [1, 2, 3, 4, 5, 10]
                 period_value = min(valid_periods, key=lambda x: abs(x - period_value))
+                requested_days = period_value
                 logger.warning(f"period_value adjusted to nearest valid value: {period_value}")
         
         # For MM200 calculation, we need at least 200 data points
@@ -66,27 +65,20 @@ def get_chart_data(symbol: str):
         # For shorter timeframes, we need more days to ensure MM200 has enough data
         # Calculate minimum days needed: 200 candles / (510 minutes per day / frequency)
         if frequency_type == 'minute' and frequency > 0:
+            # Ensure we request enough days for MM200 when possible
             minutes_per_day = 510  # 8 AM - 4:30 PM = ~8.5 hours = 510 minutes
             candles_per_day = minutes_per_day / frequency
             min_days_needed = max(1, int(200 / candles_per_day) + 1)  # +1 for safety margin
-            if min_days_needed > 10:
-                # Need more than 10 days for MM200 - switch to month (Schwab day max is 10)
-                period_type = 'month'
-                period_value = max(1, (min_days_needed + 9) // 21)  # ~21 trading days per month
-                logger.info(f"Switching to periodType=month, period={period_value} for MM200 warmup (need {min_days_needed} days, frequency: {frequency}min)")
-            elif period_value < min_days_needed:
-                logger.info(f"Increasing period_value from {period_value} to {min_days_needed} to ensure MM200 has enough data (frequency: {frequency}min)")
-                period_value = min(min_days_needed, 10)  # Cap at 10 (Schwab API limit for day)
-            logger.info(f"Requesting {period_value} {period_type}(s) of data for historical chart display")
+            if requested_days < min_days_needed:
+                requested_days = min_days_needed
+                logger.info(f"Increasing requested_days to {requested_days} for MM200 (frequency: {frequency}min)")
+            logger.info(f"Requesting {requested_days} days of minute data (will chunk into 10-day API calls if needed)")
         elif frequency_type == 'daily':
-            # For daily: need 200+ bars for MM200. ~21 trading days per month.
-            # Request extra months for warmup so MM200 extends from left edge
-            min_months_for_mm200 = max(1, 200 // 21 + 1)  # ~10 months for 200 bars
-            if period_type == 'month' and period_value < min_months_for_mm200 * 2:
-                # Request 2x to have warmup (trim first 200 bars before returning)
-                requested_months = min(20, max(period_value * 2, min_months_for_mm200 * 2))
-                logger.info(f"Increasing period_value from {period_value} to {requested_months} months for daily MM200 warmup")
-                period_value = requested_months
+            # Schwab periodType=month: period valid values are 1, 2, 3, 6 only
+            if period_type == 'month' and period_value not in [1, 2, 3, 6]:
+                period_value = min([1, 2, 3, 6], key=lambda x: abs(x - period_value))
+                logger.warning(f"period_value adjusted to valid value {period_value} for periodType=month")
+            # For MM200: ~21 trading days/month. 6 months = ~126 bars. Request max (6) for warmup.
         
         # Validate frequency for minute type (Schwab does NOT support frequency=60)
         if frequency_type == 'minute' and frequency not in [1, 5, 15, 30]:
@@ -109,21 +101,18 @@ def get_chart_data(symbol: str):
         # Calculate end date (today)
         to_date = now_et.date()
         
-        # Calculate start date based on period_value and period_type
-        # IMPORTANT: Schwab API period=10 with periodType=day means "last 10 days including today"
-        # So we need to go back (period_value - 1) days to include today
+        # Calculate start date - use requested_days for minute (may be >10)
         if period_type == 'day':
-            from_date = to_date - timedelta(days=period_value - 1)  # -1 because we include today
+            from_date = to_date - timedelta(days=requested_days - 1)  # -1 to include today
         elif period_type == 'week':
             from_date = to_date - timedelta(weeks=period_value - 1)
         elif period_type == 'month':
             from_date = to_date - timedelta(days=30 * (period_value - 1))
         else:
-            from_date = to_date - timedelta(days=period_value - 1)
+            from_date = to_date - timedelta(days=requested_days - 1)
         
-        logger.info(f"Requesting data from {from_date} to {to_date} (period={period_value}, periodType={period_type})")
+        logger.info(f"Requesting data from {from_date} to {to_date} (requested_days={requested_days}, periodType={period_type})")
         
-        # Request historical data from Schwab API
         tokens = load_tokens()
         if not tokens or 'access_token' not in tokens:
             return jsonify({"error": "Not authenticated"}), 401
@@ -132,40 +121,72 @@ def get_chart_data(symbol: str):
         if not access_token:
             return jsonify({"error": "No valid access token available"}), 401
         
-        # Build Schwab API request parameters
-        # CRITICAL: Add startDate/endDate in milliseconds to explicitly include TODAY
-        # Schwab API may omit today when using only period/periodType; explicit dates force inclusion
-        from_start = et.localize(datetime.combine(from_date, datetime.min.time()))
-        to_end = et.localize(datetime.combine(to_date, datetime.max.time()))
-        start_ms = int(from_start.timestamp() * 1000)
-        end_ms = int(to_end.timestamp() * 1000)
+        # For minute data with >10 days: make multiple API calls (Schwab limits 10 days per call)
+        all_candles = []
+        if frequency_type == 'minute' and period_type == 'day' and requested_days > 10:
+            chunk_days = 10
+            chunk_end = to_date
+            total_chunks = (requested_days + chunk_days - 1) // chunk_days
+            for i in range(total_chunks):
+                chunk_start = chunk_end - timedelta(days=chunk_days - 1)
+                from_ts = et.localize(datetime.combine(chunk_start, datetime.min.time()))
+                to_ts = et.localize(datetime.combine(chunk_end, datetime.max.time()))
+                params = {
+                    "symbol": symbol.upper(),
+                    "periodType": "day",
+                    "period": chunk_days,
+                    "frequencyType": "minute",
+                    "frequency": frequency,
+                    "startDate": int(from_ts.timestamp() * 1000),
+                    "endDate": int(to_ts.timestamp() * 1000),
+                }
+                logger.info(f"Chunk {i+1}/{total_chunks}: {chunk_start} to {chunk_end}")
+                try:
+                    response = schwab_api_request("GET", SCHWAB_HISTORICAL_URL, access_token, params=params)
+                    data = response.json()
+                except Exception as e:
+                    logger.error(f"Failed to fetch chunk for {symbol}: {e}")
+                    return jsonify({"error": f"Failed to fetch data from Schwab API: {str(e)}"}), 500
+                if data and data.get('candles'):
+                    all_candles.extend(data['candles'])
+                chunk_end = chunk_start - timedelta(days=1)
+                if chunk_end < from_date:
+                    break
+            # Deduplicate by datetime and sort
+            seen = set()
+            unique = []
+            for c in all_candles:
+                t = c.get('datetime', c.get('time'))
+                if t not in seen:
+                    seen.add(t)
+                    unique.append(c)
+            candles = sorted(unique, key=lambda c: c.get('datetime', c.get('time', 0)))
+        else:
+            # Single API call
+            period_for_api = min(period_value, 10) if period_type == 'day' else period_value
+            from_start = et.localize(datetime.combine(from_date, datetime.min.time()))
+            to_end = et.localize(datetime.combine(to_date, datetime.max.time()))
+            params = {
+                "symbol": symbol.upper(),
+                "periodType": period_type,
+                "period": period_for_api,
+                "frequencyType": frequency_type,
+                "frequency": frequency,
+                "startDate": int(from_start.timestamp() * 1000),
+                "endDate": int(to_end.timestamp() * 1000),
+            }
+            logger.info(f"Fetching from Schwab API: periodType={period_type}, period={period_for_api}, {from_date} to {to_date}")
+            try:
+                response = schwab_api_request("GET", SCHWAB_HISTORICAL_URL, access_token, params=params)
+                data = response.json()
+            except Exception as e:
+                logger.error(f"Failed to fetch data from Schwab API for {symbol}: {e}")
+                return jsonify({"error": f"Failed to fetch data from Schwab API: {str(e)}"}), 500
+            if not data or 'candles' not in data:
+                return jsonify({"error": "No data available from market data provider"}), 404
+            candles = data['candles']
         
-        params = {
-            "symbol": symbol.upper(),
-            "periodType": period_type,
-            "period": period_value,
-            "frequencyType": frequency_type,
-            "frequency": frequency,
-            "startDate": start_ms,
-            "endDate": end_ms,
-        }
-        
-        logger.info(f"Fetching data from Schwab API for {symbol}: periodType={period_type}, period={period_value}, startDate={from_date}, endDate={to_date} (explicit dates to include today)")
-        
-        try:
-            response = schwab_api_request("GET", SCHWAB_HISTORICAL_URL, access_token, params=params)
-            data = response.json()
-        except Exception as e:
-            logger.error(f"Failed to fetch data from Schwab API for {symbol}: {e}")
-            return jsonify({"error": f"Failed to fetch data from Schwab API: {str(e)}"}), 500
-        
-        if not data or 'candles' not in data:
-            logger.error(f"No data returned from Schwab API for {symbol}")
-            return jsonify({"error": "No data available from market data provider"}), 404
-        
-        candles = data['candles']
-        if not candles or len(candles) == 0:
-            logger.error(f"Empty candles array returned from Schwab API for {symbol}")
+        if not candles:
             return jsonify({"error": "Empty data returned from market data provider"}), 404
         
         logger.info(f"Received {len(candles)} candles from Schwab API for {symbol}")
@@ -202,7 +223,7 @@ def get_chart_data(symbol: str):
         # We need to calculate on the full dataset, then filter to show only 8 AM - 4:30 PM
         # Check if we have enough data for MM200 (need at least 200 candles)
         if len(df) < 200:
-            logger.warning(f"Only {len(df)} candles available, MM200 may not be fully calculated. Requested period: {period_value} {period_type}, frequency: {frequency}min")
+            logger.warning(f"Only {len(df)} candles available, MM200 may not be fully calculated. Requested: {requested_days} days, frequency: {frequency}min")
         
         df = ov_engine.calculate_indicators(df)
         

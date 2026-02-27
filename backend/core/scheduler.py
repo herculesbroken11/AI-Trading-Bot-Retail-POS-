@@ -119,10 +119,11 @@ class TradingScheduler:
                 from api.quotes import SCHWAB_HISTORICAL_URL
                 
                 try:
+                    # Request 10 days of 5-min data for 200+ candles (MM200 needs 200 bars)
                     params = {
                         "symbol": symbol.upper(),
                         "periodType": "day",
-                        "period": 1,
+                        "period": 10,
                         "frequencyType": "minute",
                         "frequency": 5
                     }
@@ -490,10 +491,11 @@ class TradingScheduler:
             recent_prices = []
             for symbol in self.watchlist[:5]:  # Use first 5 symbols
                 try:
+                    # Request 10 days of 5-min data for 200+ candles (MM200 needs 200 bars)
                     params = {
                         "symbol": symbol.upper(),
                         "periodType": "day",
-                        "period": 1,
+                        "period": 10,
                         "frequencyType": "minute",
                         "frequency": 5
                     }
